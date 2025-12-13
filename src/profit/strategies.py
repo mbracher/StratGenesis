@@ -233,6 +233,51 @@ class WilliamsRStrategy(Strategy):
                 self.position.close()
 
 
+# Baseline strategies
+
+
+class RandomStrategy(Strategy):
+    """Random trading strategy (baseline R0).
+
+    When flat, randomly choose to go long, short, or do nothing.
+    If holding a position, exit with 50% probability each time step.
+    """
+
+    def init(self):
+        # Use numpy RandomState for reproducibility (set a seed if desired)
+        self.rs = np.random.RandomState(42)  # fixed seed for repeatable random behavior
+
+    def next(self):
+        if not self.position:
+            # Choose action uniformly: 0=do nothing, 1=buy, 2=sell(short)
+            choice = self.rs.randint(0, 3)
+            if choice == 1:
+                self.buy()
+            elif choice == 2:
+                self.sell()
+        else:
+            # If currently in a trade, decide to exit with 50% probability
+            if self.rs.rand() < 0.5:
+                self.position.close()
+
+
+class BuyAndHoldStrategy(Strategy):
+    """Buy-and-Hold strategy (baseline B&H).
+
+    Buys with all capital at the first bar and holds the position until the end.
+    """
+
+    def init(self):
+        self.bought = False
+
+    def next(self):
+        if not self.bought:
+            # Enter long with all available cash at the first data point
+            self.buy()
+            self.bought = True
+        # No exit until the end (the backtesting engine will mark-to-market the position)
+
+
 # Strategy registry for easy lookup by name
 SEED_STRATEGIES = {
     "BollingerMeanReversion": BollingerMeanReversion,
@@ -241,3 +286,10 @@ SEED_STRATEGIES = {
     "MACDStrategy": MACDStrategy,
     "WilliamsRStrategy": WilliamsRStrategy,
 }
+
+BASELINE_STRATEGIES = {
+    "RandomStrategy": RandomStrategy,
+    "BuyAndHoldStrategy": BuyAndHoldStrategy,
+}
+
+ALL_STRATEGIES = {**SEED_STRATEGIES, **BASELINE_STRATEGIES}
