@@ -10,8 +10,8 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 
 | Phase | Goal | Spec File | Status |
 |-------|------|-----------|--------|
-| 1 | Project Setup & Dependencies | [`specs/phase-01-project-setup.md`](specs/phase-01-project-setup.md) | ⬜ |
-| 2 | Seed Strategies | [`specs/phase-02-seed-strategies.md`](specs/phase-02-seed-strategies.md) | ⬜ |
+| 1 | Project Setup & Dependencies | [`specs/phase-01-project-setup.md`](specs/phase-01-project-setup.md) | ✅ |
+| 2 | Seed Strategies | [`specs/phase-02-seed-strategies.md`](specs/phase-02-seed-strategies.md) | ✅ |
 | 3 | Baseline Strategies | [`specs/phase-03-baseline-strategies.md`](specs/phase-03-baseline-strategies.md) | ⬜ |
 | 4 | LLM Interface | [`specs/phase-04-llm-interface.md`](specs/phase-04-llm-interface.md) | ⬜ |
 | 5 | Backtesting Utilities | [`specs/phase-05-backtesting-utilities.md`](specs/phase-05-backtesting-utilities.md) | ⬜ |
@@ -27,10 +27,10 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 
 **Spec:** [`specs/phase-01-project-setup.md`](specs/phase-01-project-setup.md)
 
-- [ ] Update `pyproject.toml` with dependencies (backtesting, pandas, numpy, openai, anthropic)
-- [ ] Create source directory structure (`src/profit/`)
-- [ ] Add `.env.example` for API key configuration
-- [ ] Verify setup with `uv sync`
+- [x] Update `pyproject.toml` with dependencies (backtesting, pandas, numpy, openai, anthropic)
+- [x] Create source directory structure (`src/profit/`)
+- [x] Add `.env.example` for API key configuration
+- [x] Verify setup with `uv sync`
 
 ---
 
@@ -40,11 +40,11 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 
 **File:** `src/profit/strategies.py`
 
-- [ ] BollingerMeanReversion (20-period Bollinger Bands)
-- [ ] CCIStrategy (Commodity Channel Index)
-- [ ] EMACrossover (50/200 EMA crossover)
-- [ ] MACDStrategy (12-26-9 MACD)
-- [ ] WilliamsRStrategy (14-period Williams %R)
+- [x] BollingerMeanReversion (20-period Bollinger Bands)
+- [x] CCIStrategy (Commodity Channel Index)
+- [x] EMACrossover (50/200 EMA crossover)
+- [x] MACDStrategy (12-26-9 MACD)
+- [x] WilliamsRStrategy (14-period Williams %R)
 
 ---
 
