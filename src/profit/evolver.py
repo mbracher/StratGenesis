@@ -288,3 +288,79 @@ class ProfitEvolver:
             f"validation return = {best_perf:.2f}%."
         )
         return best_strategy_class, best_perf
+
+    def walk_forward_optimize(
+        self, full_data: pd.DataFrame, strategy_class, n_folds: int = 5
+    ) -> list[dict]:
+        """Perform walk-forward optimization across multiple folds.
+
+        Evolves the strategy on each training/validation set, then evaluates
+        on the test set. Compares performance against baseline strategies.
+
+        Args:
+            full_data: Complete historical DataFrame with datetime index and OHLCV columns.
+            strategy_class: Seed strategy class to evolve.
+            n_folds: Number of walk-forward folds (default: 5).
+
+        Returns:
+            List of per-fold result dictionaries containing:
+            - fold: Fold number (1-indexed)
+            - strategy: Best evolved strategy class
+            - ann_return: Annualized return on test (%)
+            - sharpe: Sharpe ratio on test
+            - expectancy: Expectancy on test (%)
+            - random_return: Random baseline return (%)
+            - buy_hold_return: Buy-and-hold baseline return (%)
+        """
+        folds = self.prepare_folds(full_data, n_folds=n_folds)
+        results = []
+
+        for i, (train, val, test) in enumerate(folds, start=1):
+            print(f"\n=== Fold {i} ===")
+            print(f"Training period: {train.index[0]} to {train.index[-1]}")
+            print(f"Validation period: {val.index[0]} to {val.index[-1]}")
+            print(f"Test period: {test.index[0]} to {test.index[-1]}")
+
+            # Evolve strategy on this fold's data
+            best_strat, _ = self.evolve_strategy(strategy_class, train, val)
+
+            # Evaluate best strategy on test set
+            metrics, res = self.run_backtest(best_strat, test)
+            ann_return = metrics["AnnReturn%"]
+            sharpe = metrics["Sharpe"]
+            expectancy = metrics["Expectancy%"]
+            print(
+                f"Fold {i} Test Performance - Annualized Return: {ann_return:.2f}%, "
+                f"Sharpe: {sharpe:.2f}, Expectancy: {expectancy:.2f}%"
+            )
+
+            # Also evaluate baselines on the test set for comparison
+            _, res_rand = self.run_backtest(RandomStrategy, test)
+            _, res_bh = self.run_backtest(BuyAndHoldStrategy, test)
+            rand_return = res_rand["Return (Ann.) [%]"]
+            bh_return = res_bh["Return (Ann.) [%]"]
+            print(
+                f"Fold {i} Baselines - Random Strat Return: {rand_return:.2f}%, "
+                f"Buy&Hold Return: {bh_return:.2f}%"
+            )
+
+            results.append({
+                "fold": i,
+                "strategy": best_strat,
+                "ann_return": ann_return,
+                "sharpe": sharpe,
+                "expectancy": expectancy,
+                "random_return": rand_return,
+                "buy_hold_return": bh_return,
+            })
+
+        # Summarize across folds
+        avg_ret = np.mean([r["ann_return"] for r in results])
+        avg_bh = np.mean([r["buy_hold_return"] for r in results])
+        avg_rand = np.mean([r["random_return"] for r in results])
+
+        print(f"\nAverage Annualized Return over {len(results)} folds: {avg_ret:.2f}%")
+        print(f"Average Buy-and-Hold Return over {len(results)} folds: {avg_bh:.2f}%")
+        print(f"Average Random Strategy Return over {len(results)} folds: {avg_rand:.2f}%")
+
+        return results

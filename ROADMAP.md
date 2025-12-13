@@ -16,7 +16,7 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | 4 | LLM Interface | [`specs/phase-04-llm-interface.md`](specs/phase-04-llm-interface.md) | ✅ |
 | 5 | Backtesting Utilities | [`specs/phase-05-backtesting-utilities.md`](specs/phase-05-backtesting-utilities.md) | ✅ |
 | 6 | Evolutionary Engine | [`specs/phase-06-evolutionary-engine.md`](specs/phase-06-evolutionary-engine.md) | ✅ |
-| 7 | Walk-Forward Optimization | [`specs/phase-07-walk-forward-optimization.md`](specs/phase-07-walk-forward-optimization.md) | ⬜ |
+| 7 | Walk-Forward Optimization | [`specs/phase-07-walk-forward-optimization.md`](specs/phase-07-walk-forward-optimization.md) | ✅ |
 | 8 | Main Entry Point | [`specs/phase-08-main-entry-point.md`](specs/phase-08-main-entry-point.md) | ⬜ |
 | 9 | Testing & Validation | [`specs/phase-09-testing.md`](specs/phase-09-testing.md) | ⬜ |
 | 10 | Documentation & Extensions | [`specs/phase-10-documentation.md`](specs/phase-10-documentation.md) | ⬜ |
@@ -103,9 +103,9 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 
 **File:** `src/profit/evolver.py`
 
-- [ ] `walk_forward_optimize()` method
-- [ ] Baseline comparison
-- [ ] Results aggregation
+- [x] `walk_forward_optimize()` method
+- [x] Baseline comparison
+- [x] Results aggregation
 
 ---
 
