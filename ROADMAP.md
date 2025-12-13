@@ -15,7 +15,7 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | 3 | Baseline Strategies | [`specs/phase-03-baseline-strategies.md`](specs/phase-03-baseline-strategies.md) | ✅ |
 | 4 | LLM Interface | [`specs/phase-04-llm-interface.md`](specs/phase-04-llm-interface.md) | ✅ |
 | 5 | Backtesting Utilities | [`specs/phase-05-backtesting-utilities.md`](specs/phase-05-backtesting-utilities.md) | ✅ |
-| 6 | Evolutionary Engine | [`specs/phase-06-evolutionary-engine.md`](specs/phase-06-evolutionary-engine.md) | ⬜ |
+| 6 | Evolutionary Engine | [`specs/phase-06-evolutionary-engine.md`](specs/phase-06-evolutionary-engine.md) | ✅ |
 | 7 | Walk-Forward Optimization | [`specs/phase-07-walk-forward-optimization.md`](specs/phase-07-walk-forward-optimization.md) | ⬜ |
 | 8 | Main Entry Point | [`specs/phase-08-main-entry-point.md`](specs/phase-08-main-entry-point.md) | ⬜ |
 | 9 | Testing & Validation | [`specs/phase-09-testing.md`](specs/phase-09-testing.md) | ⬜ |
@@ -90,10 +90,10 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 
 **File:** `src/profit/evolver.py`
 
-- [ ] `evolve_strategy()` method
-- [ ] MAS threshold logic
-- [ ] Population management
-- [ ] Code compilation and repair loop
+- [x] `evolve_strategy()` method
+- [x] MAS threshold logic
+- [x] Population management
+- [x] Code compilation and repair loop
 
 ---
 

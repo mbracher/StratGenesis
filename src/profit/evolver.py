@@ -4,8 +4,13 @@ This module contains the ProfitEvolver class which orchestrates the
 evolution loop for trading strategy optimization using LLMs.
 """
 
+import inspect
+import random
+import traceback
+
+import numpy as np
 import pandas as pd
-from backtesting import Backtest
+from backtesting import Backtest, Strategy
 
 from profit.llm_interface import LLMClient
 from profit.strategies import (
@@ -127,3 +132,159 @@ class ProfitEvolver:
             start_date = test_end
 
         return fold_splits
+
+    def _random_index(self, n: int) -> int:
+        """Return a random index in range [0, n).
+
+        Args:
+            n: Upper bound (exclusive).
+
+        Returns:
+            Random integer in [0, n).
+        """
+        return random.randrange(n)
+
+    def evolve_strategy(
+        self,
+        strategy_class,
+        train_data: pd.DataFrame,
+        val_data: pd.DataFrame,
+        max_iters: int = 15,
+    ):
+        """Evolve a strategy using LLM-guided mutations.
+
+        Implements the ProFiT evolutionary loop with MAS (Minimum Acceptable Score)
+        threshold. New strategies must meet or exceed MAS to be accepted into the
+        population.
+
+        Args:
+            strategy_class: Seed strategy class to evolve.
+            train_data: Training data (for context, not directly used in fitness).
+            val_data: Validation data for fitness evaluation.
+            max_iters: Maximum number of evolution generations (default: 15).
+
+        Returns:
+            Tuple of (best_strategy_class, best_perf) where:
+            - best_strategy_class: The evolved strategy class with highest fitness
+            - best_perf: Performance (annualized return %) on validation
+        """
+        # 1. Compute baseline performance P0 on validation set
+        _, base_result = self.run_backtest(strategy_class, val_data)
+        P0 = base_result["Return (Ann.) [%]"]
+        print(
+            f"Initial strategy {strategy_class.__name__} baseline annualized return "
+            f"on validation: {P0:.2f}%"
+        )
+
+        # 2. Set MAS = P0 (Minimum Acceptable Score)
+        MAS = P0
+
+        # Archive of viable strategies (as tuples of class and performance)
+        population = [(strategy_class, P0)]
+        best_perf = P0
+        best_strategy_class = strategy_class
+
+        # Build exec namespace with necessary imports for generated code
+        exec_globals = {
+            "Strategy": Strategy,
+            "pd": pd,
+            "np": np,
+        }
+
+        # 4. Evolution loop
+        for gen in range(1, max_iters + 1):
+            print(
+                f"\nGeneration {gen}: Current population size = {len(population)}. "
+                "Selecting a strategy to mutate..."
+            )
+
+            # 5. Select a strategy from population (random selection for diversity)
+            parent_class, parent_perf = population[self._random_index(len(population))]
+            print(
+                f"Selected parent strategy '{parent_class.__name__}' with validation "
+                f"return {parent_perf:.2f}% for mutation."
+            )
+
+            # Get source code of parent strategy
+            parent_code = inspect.getsource(parent_class)
+
+            # 6. Prompt LLM A for improvement proposal
+            improvement = self.llm.generate_improvement(
+                parent_code, f"AnnReturn={parent_perf:.2f}%"
+            )
+            print(f"LLM suggested improvement: {improvement}")
+
+            # 7. Prompt LLM B to synthesize modified strategy code
+            new_code = self.llm.generate_strategy_code(parent_code, improvement)
+
+            # Give the new strategy a unique name by generation
+            new_class_name = f"{parent_class.__name__}_Gen{gen}"
+
+            # Replace class name in code to avoid collisions
+            if new_code.startswith("class"):
+                new_code = new_code.replace(parent_class.__name__, new_class_name, 1)
+
+            # 8-11. Try to compile and backtest with repair loop
+            success = False
+            NewStrategyClass = None
+            res = None
+
+            for attempt in range(1, 11):  # up to 10 repair attempts
+                try:
+                    # Dynamically define the new strategy class from code
+                    namespace = {}
+                    exec(new_code, exec_globals, namespace)
+                    NewStrategyClass = namespace[new_class_name]
+
+                    # Run backtest on validation data to get performance
+                    _, res = self.run_backtest(NewStrategyClass, val_data)
+                    success = True
+                    break
+
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    print(f"Attempt {attempt}: Strategy code failed with error: {e}")
+
+                    if attempt < 10:
+                        # 11. Prompt LLM B with traceback to fix code
+                        new_code = self.llm.fix_code(new_code, tb)
+
+                        # Ensure the class name persists in the corrected code
+                        if new_class_name not in new_code:
+                            new_code = new_code.replace(
+                                parent_class.__name__, new_class_name, 1
+                            )
+                    else:
+                        print("Max repair attempts reached. Discarding this mutation.")
+
+            if not success:
+                continue  # Move to next generation
+
+            # 14. Compute fitness of new strategy
+            P_new = res["Return (Ann.) [%]"]
+            print(
+                f"New strategy variant '{new_class_name}' achieved validation "
+                f"annual return {P_new:.2f}%"
+            )
+
+            # 15-18. Check against MAS threshold
+            if P_new is not None and P_new >= MAS:
+                # Accept new strategy into population
+                population.append((NewStrategyClass, P_new))
+                print(
+                    f"Accepted new strategy (>= MAS={MAS:.2f}%). "
+                    f"Population size now {len(population)}."
+                )
+
+                # Update best if this is highest so far
+                if P_new > best_perf:
+                    best_perf = P_new
+                    best_strategy_class = NewStrategyClass
+            else:
+                print(f"Discarded new strategy (did not meet MAS={MAS:.2f}%).")
+
+        print(
+            f"\nEvolution complete. Best strategy '{best_strategy_class.__name__}' "
+            f"validation return = {best_perf:.2f}%."
+        )
+        return best_strategy_class, best_perf
