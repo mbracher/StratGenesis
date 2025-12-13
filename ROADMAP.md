@@ -14,7 +14,7 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | 2 | Seed Strategies | [`specs/phase-02-seed-strategies.md`](specs/phase-02-seed-strategies.md) | ✅ |
 | 3 | Baseline Strategies | [`specs/phase-03-baseline-strategies.md`](specs/phase-03-baseline-strategies.md) | ✅ |
 | 4 | LLM Interface | [`specs/phase-04-llm-interface.md`](specs/phase-04-llm-interface.md) | ✅ |
-| 5 | Backtesting Utilities | [`specs/phase-05-backtesting-utilities.md`](specs/phase-05-backtesting-utilities.md) | ⬜ |
+| 5 | Backtesting Utilities | [`specs/phase-05-backtesting-utilities.md`](specs/phase-05-backtesting-utilities.md) | ✅ |
 | 6 | Evolutionary Engine | [`specs/phase-06-evolutionary-engine.md`](specs/phase-06-evolutionary-engine.md) | ⬜ |
 | 7 | Walk-Forward Optimization | [`specs/phase-07-walk-forward-optimization.md`](specs/phase-07-walk-forward-optimization.md) | ⬜ |
 | 8 | Main Entry Point | [`specs/phase-08-main-entry-point.md`](specs/phase-08-main-entry-point.md) | ⬜ |
@@ -78,9 +78,9 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 
 **File:** `src/profit/evolver.py`
 
-- [ ] ProfitEvolver class initialization
-- [ ] `run_backtest()` method
-- [ ] `prepare_folds()` method (walk-forward splitting)
+- [x] ProfitEvolver class initialization
+- [x] `run_backtest()` method
+- [x] `prepare_folds()` method (walk-forward splitting)
 
 ---
 
