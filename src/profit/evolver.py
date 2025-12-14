@@ -410,9 +410,10 @@ class ProfitEvolver:
             fold: Walk-forward fold number for persistence (default: 1).
 
         Returns:
-            Tuple of (best_strategy_class, best_perf) where:
+            Tuple of (best_strategy_class, best_perf, best_code) where:
             - best_strategy_class: The evolved strategy class with highest fitness
             - best_perf: Performance (annualized return %) on validation
+            - best_code: Source code of the best strategy
         """
         # 1. Compute baseline performance P0 on validation set
         _, base_result = self.run_backtest(strategy_class, val_data)
@@ -425,10 +426,15 @@ class ProfitEvolver:
         # 2. Set MAS = P0 (Minimum Acceptable Score)
         MAS = P0
 
-        # Archive of viable strategies (as tuples of class and performance)
-        population = [(strategy_class, P0)]
+        # Get source code of the seed strategy
+        seed_code = inspect.getsource(strategy_class)
+
+        # Archive of viable strategies (as tuples of class, performance, and source code)
+        # We store source code to support dynamically generated strategies
+        population = [(strategy_class, P0, seed_code)]
         best_perf = P0
         best_strategy_class = strategy_class
+        best_strategy_code = seed_code
 
         # Build exec namespace with necessary imports for generated code
         exec_globals = {
@@ -445,14 +451,11 @@ class ProfitEvolver:
             )
 
             # 5. Select a strategy from population (random selection for diversity)
-            parent_class, parent_perf = population[self._random_index(len(population))]
+            parent_class, parent_perf, parent_code = population[self._random_index(len(population))]
             print(
                 f"Selected parent strategy '{parent_class.__name__}' with validation "
                 f"return {parent_perf:.2f}% for mutation."
             )
-
-            # Get source code of parent strategy
-            parent_code = inspect.getsource(parent_class)
 
             # 6. Prompt LLM A for improvement proposal
             improvement = self.llm.generate_improvement(
@@ -515,8 +518,8 @@ class ProfitEvolver:
 
             # 15-18. Check against MAS threshold
             if P_new is not None and P_new >= MAS:
-                # Accept new strategy into population
-                population.append((NewStrategyClass, P_new))
+                # Accept new strategy into population (with source code)
+                population.append((NewStrategyClass, P_new, new_code))
                 print(
                     f"Accepted new strategy (>= MAS={MAS:.2f}%). "
                     f"Population size now {len(population)}."
@@ -544,6 +547,7 @@ class ProfitEvolver:
                 if P_new > best_perf:
                     best_perf = P_new
                     best_strategy_class = NewStrategyClass
+                    best_strategy_code = new_code
             else:
                 print(f"Discarded new strategy (did not meet MAS={MAS:.2f}%).")
 
@@ -551,7 +555,7 @@ class ProfitEvolver:
             f"\nEvolution complete. Best strategy '{best_strategy_class.__name__}' "
             f"validation return = {best_perf:.2f}%."
         )
-        return best_strategy_class, best_perf
+        return best_strategy_class, best_perf, best_strategy_code
 
     def walk_forward_optimize(
         self, full_data: pd.DataFrame, strategy_class, n_folds: int = 5
@@ -595,7 +599,7 @@ class ProfitEvolver:
             print(f"Test period: {test.index[0]} to {test.index[-1]}")
 
             # Evolve strategy on this fold's data
-            best_strat, _ = self.evolve_strategy(strategy_class, train, val, fold=i)
+            best_strat, _, best_code = self.evolve_strategy(strategy_class, train, val, fold=i)
 
             # Evaluate best strategy on test set
             metrics, res = self.run_backtest(best_strat, test)
@@ -609,11 +613,6 @@ class ProfitEvolver:
 
             # Save best strategy for this fold
             if self.persister:
-                try:
-                    best_code = inspect.getsource(best_strat)
-                except OSError:
-                    # Dynamically generated class - find it in saved strategies
-                    best_code = f"# Source code not available for dynamically generated strategy\nclass {best_strat.__name__}(Strategy):\n    pass"
                 self.persister.save_fold_best(i, best_strat, best_code, metrics)
 
             # Also evaluate baselines on the test set for comparison

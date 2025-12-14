@@ -56,12 +56,13 @@ class TestFullEvolution:
         train = medium_data.iloc[:1000]
         val = medium_data.iloc[1000:1500]
 
-        best_class, best_perf = evolver.evolve_strategy(
+        best_class, best_perf, best_code = evolver.evolve_strategy(
             EMACrossover, train, val, max_iters=1
         )
 
         assert best_class is not None
         assert isinstance(best_perf, (int, float))
+        assert isinstance(best_code, str)
 
     def test_evolve_strategy_calls_llm(self, medium_data):
         """Evolution should call LLM for improvements."""
@@ -94,7 +95,7 @@ class TestFullEvolution:
         val = medium_data.iloc[1000:1500]
 
         # Should not raise, should use fix_code to repair
-        best_class, best_perf = evolver.evolve_strategy(
+        best_class, best_perf, best_code = evolver.evolve_strategy(
             EMACrossover, train, val, max_iters=1
         )
 
@@ -173,7 +174,7 @@ class TestEndToEnd:
         train = medium_data.iloc[:1000]
         val = medium_data.iloc[1000:1500]
 
-        evolved_class, evolved_perf = evolver.evolve_strategy(
+        evolved_class, evolved_perf, evolved_code = evolver.evolve_strategy(
             EMACrossover, train, val, max_iters=1
         )
 
@@ -185,27 +186,34 @@ class TestEndToEnd:
         assert evolved_metrics is not None
         assert evolved_class is not None
 
-    def test_multiple_iterations_single_gen(self, medium_data):
-        """Test evolution with multiple iterations (single generation only).
+    def test_multiple_iterations_multi_gen(self, medium_data):
+        """Test evolution with multiple generations.
 
-        Note: Multi-generation evolution with dynamically created classes
-        cannot use inspect.getsource() since the class was created via exec().
-        This is expected behavior - real usage always starts from file-defined classes.
+        Dynamically created strategies can now be mutated because we store
+        their source code alongside the class in the population.
         """
+        # Generate unique class names for each call
+        def make_strategy_code(parent_code, improvement):
+            # The evolve_strategy method will rename the class based on generation
+            return VALID_STRATEGY_CODE.replace("EMACrossover_Gen1", "EMACrossover")
+
         mock_llm = Mock()
         mock_llm.generate_improvement.return_value = "Improve entry timing"
-        mock_llm.generate_strategy_code.return_value = VALID_STRATEGY_CODE
+        mock_llm.generate_strategy_code.side_effect = make_strategy_code
+        mock_llm.fix_code.side_effect = make_strategy_code  # In case repair is needed
 
         evolver = ProfitEvolver(mock_llm)
 
         train = medium_data.iloc[:1000]
         val = medium_data.iloc[1000:1500]
 
-        # Test with 1 iteration to avoid inspect.getsource issue with dynamic classes
-        evolved_class, evolved_perf = evolver.evolve_strategy(
-            EMACrossover, train, val, max_iters=1
+        # Test with multiple iterations to ensure dynamically created strategies
+        # can be mutated (source code is stored with the class)
+        evolved_class, evolved_perf, evolved_code = evolver.evolve_strategy(
+            EMACrossover, train, val, max_iters=3
         )
 
-        # LLM should have been called
+        # LLM should have been called multiple times for multiple generations
         assert mock_llm.generate_improvement.call_count >= 1
         assert evolved_class is not None
+        assert isinstance(evolved_code, str)
