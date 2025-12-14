@@ -127,6 +127,11 @@ def main() -> int:
     parser.add_argument(
         "--commission", type=float, default=0.002, help="Commission rate"
     )
+    parser.add_argument(
+        "--output-dir",
+        default="evolved_strategies",
+        help="Directory to save evolved strategies (use 'none' to disable)",
+    )
 
     args = parser.parse_args()
 
@@ -148,10 +153,12 @@ def main() -> int:
     llm_client = LLMClient(provider=args.provider, model=args.model)
 
     # Initialize evolver
+    output_dir = None if args.output_dir.lower() == "none" else args.output_dir
     evolver = ProfitEvolver(
         llm_client,
         initial_capital=args.capital,
         commission=args.commission,
+        output_dir=output_dir,
     )
 
     # Get strategy class

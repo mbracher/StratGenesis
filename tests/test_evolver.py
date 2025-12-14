@@ -1,10 +1,13 @@
 """Unit tests for ProfitEvolver."""
 
+import json
 import pytest
+import tempfile
+from pathlib import Path
 from unittest.mock import Mock
 import pandas as pd
 
-from profit.evolver import ProfitEvolver
+from profit.evolver import ProfitEvolver, StrategyPersister, load_strategy
 from profit.strategies import EMACrossover, BuyAndHoldStrategy
 
 
@@ -204,3 +207,206 @@ class TestMetricsExtraction:
         metrics, _ = evolver.run_backtest(EMACrossover, medium_data)
 
         assert isinstance(metrics["Trades"], (int, float))
+
+
+class TestStrategyPersister:
+    """Test StrategyPersister class."""
+
+    def test_init_sets_output_dir(self):
+        """Should store output directory."""
+        persister = StrategyPersister("custom_dir")
+        assert persister.output_dir == Path("custom_dir")
+
+    def test_start_run_creates_directory(self):
+        """Should create run directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            persister = StrategyPersister(tmpdir)
+            run_dir = persister.start_run("TestStrategy", "openai", "gpt-4")
+
+            assert run_dir.exists()
+            assert run_dir.parent == Path(tmpdir)
+            assert "run_" in run_dir.name
+
+    def test_start_run_creates_summary_file(self):
+        """Should create initial run summary."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            persister = StrategyPersister(tmpdir)
+            run_dir = persister.start_run("TestStrategy", "openai", "gpt-4")
+
+            summary_path = run_dir / "run_summary.json"
+            assert summary_path.exists()
+
+            summary = json.loads(summary_path.read_text())
+            assert summary["seed_strategy"] == "TestStrategy"
+            assert summary["llm_provider"] == "openai"
+            assert summary["llm_model"] == "gpt-4"
+            assert summary["folds"] == []
+
+    def test_save_strategy_creates_files(self):
+        """Should create .py and .json files for strategy."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            persister = StrategyPersister(tmpdir)
+            persister.start_run("TestStrategy", "openai", "gpt-4")
+
+            metrics = {"AnnReturn%": 15.5, "Sharpe": 1.2}
+            strategy_path = persister.save_strategy(
+                strategy_class=EMACrossover,
+                source_code="class TestClass(Strategy):\n    pass",
+                fold=1,
+                generation=3,
+                metrics=metrics,
+                parent_name="ParentStrategy",
+                improvement_proposal="Add RSI filter",
+            )
+
+            assert strategy_path.exists()
+            assert strategy_path.suffix == ".py"
+
+            # Check metadata file exists
+            metadata_path = strategy_path.with_suffix(".json")
+            assert metadata_path.exists()
+
+            # Check metadata contents
+            metadata = json.loads(metadata_path.read_text())
+            assert metadata["class_name"] == "EMACrossover"
+            assert metadata["fold"] == 1
+            assert metadata["generation"] == 3
+            assert metadata["parent_strategy"] == "ParentStrategy"
+            assert metadata["improvement_proposal"] == "Add RSI filter"
+            assert metadata["metrics"]["AnnReturn%"] == 15.5
+
+    def test_save_fold_best_creates_file(self):
+        """Should create best_strategy.py file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            persister = StrategyPersister(tmpdir)
+            persister.start_run("TestStrategy", "openai", "gpt-4")
+
+            metrics = {"AnnReturn%": 20.0, "Sharpe": 1.5}
+            best_path = persister.save_fold_best(
+                fold=1,
+                strategy_class=EMACrossover,
+                source_code="class TestClass(Strategy):\n    pass",
+                metrics=metrics,
+            )
+
+            assert best_path.exists()
+            assert best_path.name == "best_strategy.py"
+
+    def test_finalize_run_updates_summary(self):
+        """Should update summary with fold results."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            persister = StrategyPersister(tmpdir)
+            persister.start_run("TestStrategy", "openai", "gpt-4")
+
+            # Create a fold directory with best_strategy.py
+            fold_dir = persister.run_dir / "fold_1"
+            fold_dir.mkdir()
+            (fold_dir / "best_strategy.py").write_text("# test")
+
+            results = [{
+                "fold": 1,
+                "strategy": EMACrossover,
+                "ann_return": 15.0,
+                "sharpe": 1.2,
+                "expectancy": 2.5,
+                "random_return": 5.0,
+                "buy_hold_return": 10.0,
+            }]
+
+            summary_path = persister.finalize_run(results)
+
+            summary = json.loads(summary_path.read_text())
+            assert summary["completed_at"] is not None
+            assert len(summary["folds"]) == 1
+            assert summary["folds"][0]["ann_return"] == 15.0
+            assert summary["avg_ann_return"] == 15.0
+            assert summary["best_fold"] == 1
+
+    def test_finalize_run_copies_best_overall(self):
+        """Should copy best strategy to root."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            persister = StrategyPersister(tmpdir)
+            persister.start_run("TestStrategy", "openai", "gpt-4")
+
+            # Create fold directories with best strategies
+            fold1_dir = persister.run_dir / "fold_1"
+            fold1_dir.mkdir()
+            (fold1_dir / "best_strategy.py").write_text("# fold 1 best")
+
+            fold2_dir = persister.run_dir / "fold_2"
+            fold2_dir.mkdir()
+            (fold2_dir / "best_strategy.py").write_text("# fold 2 best")
+
+            results = [
+                {"fold": 1, "strategy": EMACrossover, "ann_return": 10.0,
+                 "sharpe": 1.0, "expectancy": 2.0, "random_return": 5.0, "buy_hold_return": 8.0},
+                {"fold": 2, "strategy": EMACrossover, "ann_return": 20.0,
+                 "sharpe": 1.5, "expectancy": 3.0, "random_return": 5.0, "buy_hold_return": 8.0},
+            ]
+
+            persister.finalize_run(results)
+
+            best_overall = persister.run_dir / "best_overall.py"
+            assert best_overall.exists()
+            assert best_overall.read_text() == "# fold 2 best"
+
+
+class TestLoadStrategy:
+    """Test load_strategy function."""
+
+    def test_load_strategy_returns_class(self):
+        """Should return a Strategy subclass."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            strategy_code = '''
+from backtesting import Strategy
+
+class TestLoadedStrategy(Strategy):
+    def init(self):
+        pass
+    def next(self):
+        pass
+'''
+            strategy_path = Path(tmpdir) / "test_strategy.py"
+            strategy_path.write_text(strategy_code)
+
+            loaded_class = load_strategy(str(strategy_path))
+
+            assert loaded_class is not None
+            assert loaded_class.__name__ == "TestLoadedStrategy"
+
+    def test_load_strategy_raises_if_no_strategy(self):
+        """Should raise if no Strategy subclass found."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            code = "x = 1"
+            path = Path(tmpdir) / "no_strategy.py"
+            path.write_text(code)
+
+            with pytest.raises(ValueError, match="No Strategy subclass found"):
+                load_strategy(str(path))
+
+
+class TestProfitEvolverPersistence:
+    """Test ProfitEvolver persistence integration."""
+
+    def test_output_dir_creates_persister(self):
+        """Should create persister when output_dir is set."""
+        mock_llm = Mock()
+        evolver = ProfitEvolver(mock_llm, output_dir="test_output")
+
+        assert evolver.persister is not None
+        assert evolver.persister.output_dir == Path("test_output")
+
+    def test_output_dir_none_disables_persister(self):
+        """Should not create persister when output_dir is None."""
+        mock_llm = Mock()
+        evolver = ProfitEvolver(mock_llm, output_dir=None)
+
+        assert evolver.persister is None
+
+    def test_default_output_dir(self):
+        """Should use default output directory."""
+        mock_llm = Mock()
+        evolver = ProfitEvolver(mock_llm)
+
+        assert evolver.persister is not None
+        assert evolver.persister.output_dir == Path("evolved_strategies")
