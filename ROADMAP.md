@@ -19,7 +19,7 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | 7 | Walk-Forward Optimization | [`specs/phase-07-walk-forward-optimization.md`](specs/phase-07-walk-forward-optimization.md) | ✅ |
 | 8 | Main Entry Point | [`specs/phase-08-main-entry-point.md`](specs/phase-08-main-entry-point.md) | ✅ |
 | 9 | Testing & Validation | [`specs/phase-09-testing.md`](specs/phase-09-testing.md) | ✅ |
-| 10 | Documentation & Extensions | [`specs/phase-10-documentation.md`](specs/phase-10-documentation.md) | ⬜ |
+| 10 | Documentation & Extensions | [`specs/phase-10-documentation.md`](specs/phase-10-documentation.md) | ✅ |
 
 ---
 
@@ -139,9 +139,10 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 
 **Spec:** [`specs/phase-10-documentation.md`](specs/phase-10-documentation.md)
 
-- [ ] Installation guide
-- [ ] Usage documentation
-- [ ] Alternative data integration guide
+- [x] Installation guide (`docs/installation.md`)
+- [x] Usage documentation (`docs/usage.md`)
+- [x] Configuration reference (`docs/configuration.md`)
+- [x] Alternative data integration guide (`docs/alternative-data.md`)
 
 ---
 

@@ -76,6 +76,10 @@ Datetime,Open,High,Low,Close,Volume
 
 ## Documentation
 
+- **[docs/installation.md](docs/installation.md)** - Installation guide
+- **[docs/usage.md](docs/usage.md)** - Usage examples and API reference
+- **[docs/configuration.md](docs/configuration.md)** - Configuration reference
+- **[docs/alternative-data.md](docs/alternative-data.md)** - Alternative data integration
 - **[ROADMAP.md](ROADMAP.md)** - Implementation roadmap with phase overview
 - **[specs/](specs/)** - Detailed specifications for each implementation phase
 - **[CLAUDE.md](CLAUDE.md)** - Guidance for Claude Code
@@ -90,6 +94,7 @@ profit/
 │   ├── evolver.py         # Evolutionary engine
 │   └── main.py            # CLI entry point
 ├── tests/                 # Test suite
+├── docs/                  # Documentation
 ├── specs/                 # Implementation specifications
 ├── ROADMAP.md             # Implementation roadmap
 └── README.md              # This file
