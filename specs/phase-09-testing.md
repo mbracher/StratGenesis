@@ -483,11 +483,11 @@ uv run pytest -v
 
 ## Deliverables
 
-- [ ] `tests/conftest.py` with sample data fixtures
-- [ ] `tests/test_strategies.py` - Strategy unit tests
-- [ ] `tests/test_llm_interface.py` - LLM client tests (mocked)
-- [ ] `tests/test_evolver.py` - Evolver utility tests
-- [ ] `tests/test_integration.py` - Integration tests
-- [ ] Sample data generator or fixture
-- [ ] pytest configuration
-- [ ] All tests passing
+- [x] `tests/conftest.py` with sample data fixtures
+- [x] `tests/test_strategies.py` - Strategy unit tests
+- [x] `tests/test_llm_interface.py` - LLM client tests (mocked)
+- [x] `tests/test_evolver.py` - Evolver utility tests
+- [x] `tests/test_integration.py` - Integration tests
+- [x] Sample data generator or fixture
+- [x] pytest configuration
+- [x] All tests passing
