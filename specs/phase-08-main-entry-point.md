@@ -329,10 +329,10 @@ uv run python main.py --data ES_hourly.csv --folds 3 --capital 50000 --commissio
 
 ## Deliverables
 
-- [ ] `main.py` with data loading
-- [ ] Command-line argument parsing
-- [ ] Strategy selection by name
-- [ ] LLM provider configuration
-- [ ] Results formatting and output
-- [ ] Data validation
-- [ ] Error handling
+- [x] `main.py` with data loading
+- [x] Command-line argument parsing
+- [x] Strategy selection by name
+- [x] LLM provider configuration
+- [x] Results formatting and output
+- [x] Data validation
+- [x] Error handling
