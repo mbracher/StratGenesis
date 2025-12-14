@@ -10,6 +10,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 
 from profit.evolver import ProfitEvolver
 from profit.llm_interface import LLMClient
@@ -98,6 +99,8 @@ def main() -> int:
     Returns:
         Exit code (0 for success, non-zero for errors).
     """
+    load_dotenv()
+
     parser = argparse.ArgumentParser(
         description="ProFiT: LLM-Driven Evolutionary Trading System"
     )

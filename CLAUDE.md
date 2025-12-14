@@ -37,6 +37,7 @@ profit/
 │   ├── llm_interface.py   # LLM client for mutations
 │   ├── evolver.py         # Evolutionary engine
 │   └── main.py            # CLI entry point
+├── scripts/               # Data download utilities (PEP 723 inline deps)
 ├── tests/                 # Test suite
 ├── specs/                 # Phase specifications (implementation details)
 ├── ROADMAP.md             # Implementation roadmap

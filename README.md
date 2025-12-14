@@ -28,12 +28,35 @@ ProFiT (Program Search for Financial Trading) is a framework for automated disco
 # Install dependencies
 uv sync
 
+# Download sample data (S&P 500, 5 years daily)
+uv run scripts/download_sample.py
+
 # Set API keys
 export OPENAI_API_KEY="your-key-here"
 
 # Run evolution
-uv run python -m profit.main --data data/ES_hourly.csv --strategy EMACrossover
+uv run python -m profit.main --data data/ES_daily.csv --strategy EMACrossover
 ```
+
+## Download Data
+
+Self-contained scripts to download market data (no manual dependency setup needed):
+
+```bash
+# Quick start - download sample S&P 500 data
+uv run scripts/download_sample.py
+
+# Yahoo Finance (free, no API key)
+uv run scripts/download_yahoo.py --ticker SPY --period 10y
+
+# Alpha Vantage (requires free API key)
+uv run scripts/download_alphavantage.py --ticker AAPL --api-key YOUR_KEY
+
+# FRED macroeconomic data
+uv run scripts/download_fred.py --series "VIXCLS,FEDFUNDS"
+```
+
+See [docs/data-sources.md](docs/data-sources.md) for full documentation.
 
 ## Available Strategies
 
@@ -94,6 +117,7 @@ profit/
 │   ├── llm_interface.py   # LLM client for mutations
 │   ├── evolver.py         # Evolutionary engine
 │   └── main.py            # CLI entry point
+├── scripts/               # Data download utilities
 ├── tests/                 # Test suite
 ├── docs/                  # Documentation
 ├── specs/                 # Implementation specifications
