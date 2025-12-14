@@ -296,6 +296,7 @@ class ProfitEvolver:
         commission: float = 0.002,
         exclusive_orders: bool = True,
         output_dir: str | None = "evolved_strategies",
+        finalize_trades: bool = True,
     ):
         """Initialize the ProfitEvolver.
 
@@ -305,11 +306,13 @@ class ProfitEvolver:
             commission: Per-trade commission rate (default: 0.002 = 0.2%).
             exclusive_orders: If True, no overlapping long/short positions.
             output_dir: Directory to save evolved strategies. Set to None to disable.
+            finalize_trades: If True, auto-close open trades at backtest end.
         """
         self.llm = llm_client
         self.initial_capital = initial_capital
         self.commission = commission
         self.exclusive_orders = exclusive_orders
+        self.finalize_trades = finalize_trades
         self.persister = StrategyPersister(output_dir) if output_dir else None
 
     def run_backtest(self, strategy_class, data: pd.DataFrame) -> tuple[dict, pd.Series]:
@@ -330,6 +333,7 @@ class ProfitEvolver:
             cash=self.initial_capital,
             commission=self.commission,
             exclusive_orders=self.exclusive_orders,
+            finalize_trades=self.finalize_trades,
         )
         result = bt.run()
 

@@ -160,6 +160,11 @@ def main() -> int:
         default="evolved_strategies",
         help="Directory to save evolved strategies (use 'none' to disable)",
     )
+    parser.add_argument(
+        "--no-finalize-trades",
+        action="store_true",
+        help="Don't auto-close open trades at backtest end (shows warnings)",
+    )
 
     args = parser.parse_args()
 
@@ -195,6 +200,7 @@ def main() -> int:
         initial_capital=args.capital,
         commission=args.commission,
         output_dir=output_dir,
+        finalize_trades=not args.no_finalize_trades,
     )
 
     # Get strategy class
