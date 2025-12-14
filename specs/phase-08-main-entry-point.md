@@ -21,7 +21,7 @@ from llm_interface import LLMClient
 
 # Load your 1-hour historical data for an asset (e.g., ES).
 # For example, from a CSV:
-data = pd.read_csv("ES_hourly.csv", parse_dates=True, index_col="Datetime")
+data = pd.read_csv("data/ES_hourly.csv", parse_dates=True, index_col="Datetime")
 
 # Instantiate the LLM client (OpenAI GPT example; ensure OPENAI_API_KEY is set in env)
 llm_client = LLMClient(provider="openai", model="gpt-4")
@@ -58,7 +58,7 @@ pd.DatetimeIndex
 ### Data Loading Example
 
 ```python
-data = pd.read_csv("ES_hourly.csv", parse_dates=True, index_col="Datetime")
+data = pd.read_csv("data/ES_hourly.csv", parse_dates=True, index_col="Datetime")
 ```
 
 ### Supported Assets (from paper)
@@ -188,7 +188,7 @@ Average Random Strategy Return over 5 folds: O.OO%
 ProFiT: LLM-Driven Evolutionary Trading System
 
 Usage:
-    python main.py --data ES_hourly.csv --strategy EMACrossover --provider openai --model gpt-4
+    uv run python -m profit.main --data data/ES_hourly.csv --strategy EMACrossover --provider openai --model gpt-4
 """
 
 import argparse
@@ -316,13 +316,13 @@ if __name__ == "__main__":
 
 ```bash
 # Basic usage
-uv run python main.py --data ES_hourly.csv
+uv run python -m profit.main --data data/ES_hourly.csv
 
 # Specify strategy and LLM
-uv run python main.py --data ES_hourly.csv --strategy MACDStrategy --provider anthropic --model claude-3-opus
+uv run python -m profit.main --data data/ES_hourly.csv --strategy MACDStrategy --provider anthropic --model claude-3-opus
 
 # Custom configuration
-uv run python main.py --data ES_hourly.csv --folds 3 --capital 50000 --commission 0.001
+uv run python -m profit.main --data data/ES_hourly.csv --folds 3 --capital 50000 --commission 0.001
 ```
 
 ---

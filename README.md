@@ -79,6 +79,7 @@ Datetime,Open,High,Low,Close,Volume
 - **[docs/installation.md](docs/installation.md)** - Installation guide
 - **[docs/usage.md](docs/usage.md)** - Usage examples and API reference
 - **[docs/configuration.md](docs/configuration.md)** - Configuration reference
+- **[docs/data-sources.md](docs/data-sources.md)** - Where to download example data
 - **[docs/alternative-data.md](docs/alternative-data.md)** - Alternative data integration
 - **[ROADMAP.md](ROADMAP.md)** - Implementation roadmap with phase overview
 - **[specs/](specs/)** - Detailed specifications for each implementation phase

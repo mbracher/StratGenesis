@@ -277,15 +277,15 @@ Add alternative data columns to your DataFrame:
 
 ```python
 # Load price data
-data = pd.read_csv("ES_hourly.csv", parse_dates=True, index_col=0)
+data = pd.read_csv("data/ES_hourly.csv", parse_dates=True, index_col=0)
 
 # Load and merge sentiment data
-sentiment = pd.read_csv("sentiment.csv", parse_dates=True, index_col=0)
+sentiment = pd.read_csv("data/sentiment.csv", parse_dates=True, index_col=0)
 data = data.join(sentiment, how='left')
 data['Sentiment'] = data['Sentiment'].ffill()  # Forward-fill missing values
 
 # Load and merge macro data
-macro = pd.read_csv("macro.csv", parse_dates=True, index_col=0)
+macro = pd.read_csv("data/macro.csv", parse_dates=True, index_col=0)
 data = data.join(macro, how='left')
 data['GDP_Growth'] = data['GDP_Growth'].ffill()
 ```
@@ -407,10 +407,10 @@ class RegimeAwareStrategy(Strategy):
 
 ## Deliverables
 
-- [ ] Updated README.md with project overview
-- [ ] `docs/installation.md` - Installation guide
-- [ ] `docs/usage.md` - Usage examples
-- [ ] `docs/configuration.md` - Configuration reference
-- [ ] `docs/alternative-data.md` - Alternative data integration guide
-- [ ] API reference documentation (optional, can use docstrings)
+- [x] Updated README.md with project overview
+- [x] `docs/installation.md` - Installation guide
+- [x] `docs/usage.md` - Usage examples
+- [x] `docs/configuration.md` - Configuration reference
+- [x] `docs/alternative-data.md` - Alternative data integration guide
+- [x] API reference documentation (optional, can use docstrings)
 - [ ] Example data files or instructions for obtaining data

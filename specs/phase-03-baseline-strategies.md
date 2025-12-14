@@ -153,7 +153,7 @@ class BuyAndHoldStrategy(Strategy): ...
 
 ## Deliverables
 
-- [ ] `RandomStrategy` class with seeded randomness
-- [ ] `BuyAndHoldStrategy` class
-- [ ] Both strategies testable with backtesting.py
-- [ ] Verification that baselines produce expected behavior
+- [x] `RandomStrategy` class with seeded randomness
+- [x] `BuyAndHoldStrategy` class
+- [x] Both strategies testable with backtesting.py
+- [x] Verification that baselines produce expected behavior

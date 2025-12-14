@@ -266,9 +266,9 @@ print(result)
 
 ## Deliverables
 
-- [ ] `BollingerMeanReversion` class
-- [ ] `CCIStrategy` class
-- [ ] `EMACrossover` class
-- [ ] `MACDStrategy` class
-- [ ] `WilliamsRStrategy` class
-- [ ] All strategies testable with backtesting.py
+- [x] `BollingerMeanReversion` class
+- [x] `CCIStrategy` class
+- [x] `EMACrossover` class
+- [x] `MACDStrategy` class
+- [x] `WilliamsRStrategy` class
+- [x] All strategies testable with backtesting.py

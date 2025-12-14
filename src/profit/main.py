@@ -2,7 +2,7 @@
 """ProFiT: LLM-Driven Evolutionary Trading System
 
 Usage:
-    python -m profit.main --data ES_hourly.csv --strategy EMACrossover --provider openai --model gpt-4
+    uv run python -m profit.main --data data/ES_hourly.csv --strategy EMACrossover --provider openai --model gpt-4
 """
 
 import argparse

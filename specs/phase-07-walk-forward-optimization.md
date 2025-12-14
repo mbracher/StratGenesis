@@ -262,10 +262,10 @@ class ProfitEvolver:
 
 ## Deliverables
 
-- [ ] `walk_forward_optimize()` method
-- [ ] Per-fold evolution execution
-- [ ] Test set evaluation for evolved strategies
-- [ ] Baseline comparison (Random, Buy-and-Hold)
-- [ ] Results collection and aggregation
-- [ ] Summary statistics printing
-- [ ] Complete `evolver.py` module
+- [x] `walk_forward_optimize()` method
+- [x] Per-fold evolution execution
+- [x] Test set evaluation for evolved strategies
+- [x] Baseline comparison (Random, Buy-and-Hold)
+- [x] Results collection and aggregation
+- [x] Summary statistics printing
+- [x] Complete `evolver.py` module

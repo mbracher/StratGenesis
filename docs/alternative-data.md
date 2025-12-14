@@ -10,15 +10,15 @@ Add alternative data columns to your DataFrame:
 
 ```python
 # Load price data
-data = pd.read_csv("ES_hourly.csv", parse_dates=True, index_col=0)
+data = pd.read_csv("data/ES_hourly.csv", parse_dates=True, index_col=0)
 
 # Load and merge sentiment data
-sentiment = pd.read_csv("sentiment.csv", parse_dates=True, index_col=0)
+sentiment = pd.read_csv("data/sentiment.csv", parse_dates=True, index_col=0)
 data = data.join(sentiment, how='left')
 data['Sentiment'] = data['Sentiment'].ffill()  # Forward-fill missing values
 
 # Load and merge macro data
-macro = pd.read_csv("macro.csv", parse_dates=True, index_col=0)
+macro = pd.read_csv("data/macro.csv", parse_dates=True, index_col=0)
 data = data.join(macro, how='left')
 data['GDP_Growth'] = data['GDP_Growth'].ffill()
 ```

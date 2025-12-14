@@ -177,7 +177,7 @@ For 5 folds with default settings:
 
 ### Example Data Loading
 ```python
-data = pd.read_csv("ES_hourly.csv", parse_dates=True, index_col="Datetime")
+data = pd.read_csv("data/ES_hourly.csv", parse_dates=True, index_col="Datetime")
 ```
 
 ---
@@ -205,7 +205,7 @@ from llm_interface import LLMClient
 import pandas as pd
 
 # Load data
-data = pd.read_csv("ES_hourly.csv", parse_dates=True, index_col="Datetime")
+data = pd.read_csv("data/ES_hourly.csv", parse_dates=True, index_col="Datetime")
 
 # Initialize
 llm = LLMClient(provider="openai", model="gpt-4")
@@ -255,8 +255,8 @@ class ProfitEvolver:
 
 ## Deliverables
 
-- [ ] `ProfitEvolver` class with constructor
-- [ ] `run_backtest()` method returning metrics dict and result
-- [ ] `prepare_folds()` method with configurable fold count
-- [ ] Proper datetime handling for data splitting
-- [ ] 10-day gap implementation between periods
+- [x] `ProfitEvolver` class with constructor
+- [x] `run_backtest()` method returning metrics dict and result
+- [x] `prepare_folds()` method with configurable fold count
+- [x] Proper datetime handling for data splitting
+- [x] 10-day gap implementation between periods

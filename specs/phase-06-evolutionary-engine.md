@@ -326,12 +326,12 @@ def evolve_strategy(self, strategy_class, train_data: pd.DataFrame,
 
 ## Deliverables
 
-- [ ] `evolve_strategy()` method
-- [ ] MAS threshold initialization and checking
-- [ ] Population management (archive of strategies)
-- [ ] Random selection from population
-- [ ] Dynamic code compilation with `exec()`
-- [ ] Repair loop (up to 10 attempts)
-- [ ] Unique class naming per generation
-- [ ] Best strategy tracking
-- [ ] `_random_index()` helper method
+- [x] `evolve_strategy()` method
+- [x] MAS threshold initialization and checking
+- [x] Population management (archive of strategies)
+- [x] Random selection from population
+- [x] Dynamic code compilation with `exec()`
+- [x] Repair loop (up to 10 attempts)
+- [x] Unique class naming per generation
+- [x] Best strategy tracking
+- [x] `_random_index()` helper method

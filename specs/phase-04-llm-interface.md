@@ -267,10 +267,10 @@ class LLMClient:
 
 ## Deliverables
 
-- [ ] `LLMClient` class with provider abstraction
-- [ ] `generate_improvement()` method
-- [ ] `generate_strategy_code()` method
-- [ ] `fix_code()` method
-- [ ] `_chat()` internal helper
-- [ ] Markdown stripping for code responses
-- [ ] Environment variable support for API keys
+- [x] `LLMClient` class with provider abstraction
+- [x] `generate_improvement()` method
+- [x] `generate_strategy_code()` method
+- [x] `fix_code()` method
+- [x] `_chat()` internal helper
+- [x] Markdown stripping for code responses
+- [x] Environment variable support for API keys
