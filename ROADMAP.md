@@ -20,6 +20,8 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | 8 | Main Entry Point | [`specs/phase-08-main-entry-point.md`](specs/phase-08-main-entry-point.md) | ✅ |
 | 9 | Testing & Validation | [`specs/phase-09-testing.md`](specs/phase-09-testing.md) | ✅ |
 | 10 | Documentation & Extensions | [`specs/phase-10-documentation.md`](specs/phase-10-documentation.md) | ✅ |
+| 11 | Strategy Persistence | [`specs/phase-11-strategy-persistence.md`](specs/phase-11-strategy-persistence.md) | ✅ |
+| 12 | Dual-Model LLM Configuration | [`specs/phase-12-dual-model-llm.md`](specs/phase-12-dual-model-llm.md) | ✅ |
 
 ---
 
@@ -143,6 +145,35 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 - [x] Usage documentation (`docs/usage.md`)
 - [x] Configuration reference (`docs/configuration.md`)
 - [x] Alternative data integration guide (`docs/alternative-data.md`)
+
+---
+
+## Phase 11: Strategy Persistence
+
+**Spec:** [`specs/phase-11-strategy-persistence.md`](specs/phase-11-strategy-persistence.md)
+
+**File:** `src/profit/evolver.py`
+
+- [x] `StrategyPersister` class
+- [x] Save evolved strategies as `.py` files
+- [x] Save metadata as `.json` files
+- [x] Run summary generation
+- [x] `load_strategy()` utility function
+- [x] CLI `--output-dir` argument
+
+---
+
+## Phase 12: Dual-Model LLM Configuration
+
+**Spec:** [`specs/phase-12-dual-model-llm.md`](specs/phase-12-dual-model-llm.md)
+
+**Files:** `src/profit/llm_interface.py`, `src/profit/main.py`
+
+- [x] Separate analyst/coder provider configuration
+- [x] Separate analyst/coder model configuration
+- [x] CLI arguments (`--analyst-provider`, `--analyst-model`, `--coder-provider`, `--coder-model`)
+- [x] Backward compatibility with single provider mode
+- [x] Updated persistence to record dual-model config
 
 ---
 

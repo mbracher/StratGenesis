@@ -111,13 +111,41 @@ def main() -> int:
         choices=STRATEGIES.keys(),
         help="Seed strategy to evolve",
     )
+    # LLM configuration - default provider/model
     parser.add_argument(
         "--provider",
         default="openai",
         choices=["openai", "anthropic"],
-        help="LLM provider",
+        help="Default LLM provider for both roles (default: openai)",
     )
-    parser.add_argument("--model", default=None, help="LLM model name")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Default model for both roles (uses provider default if not set)",
+    )
+    # Role-specific configuration
+    parser.add_argument(
+        "--analyst-provider",
+        choices=["openai", "anthropic"],
+        default=None,
+        help="LLM provider for analysis/improvements (overrides --provider)",
+    )
+    parser.add_argument(
+        "--analyst-model",
+        default=None,
+        help="Model for analysis/improvements (overrides --model)",
+    )
+    parser.add_argument(
+        "--coder-provider",
+        choices=["openai", "anthropic"],
+        default=None,
+        help="LLM provider for code generation (overrides --provider)",
+    )
+    parser.add_argument(
+        "--coder-model",
+        default=None,
+        help="Model for code generation (overrides --model)",
+    )
     parser.add_argument(
         "--folds", type=int, default=5, help="Number of walk-forward folds"
     )
@@ -148,9 +176,17 @@ def main() -> int:
 
     print(f"Loaded {len(data)} bars from {data.index[0]} to {data.index[-1]}")
 
-    # Initialize LLM client
-    print(f"Initializing {args.provider} LLM client...")
-    llm_client = LLMClient(provider=args.provider, model=args.model)
+    # Initialize LLM client with dual-model support
+    llm_client = LLMClient(
+        provider=args.provider,
+        model=args.model,
+        analyst_provider=args.analyst_provider,
+        analyst_model=args.analyst_model,
+        coder_provider=args.coder_provider,
+        coder_model=args.coder_model,
+    )
+    print(f"LLM Analyst: {llm_client.analyst_provider}/{llm_client.analyst_model}")
+    print(f"LLM Coder: {llm_client.coder_provider}/{llm_client.coder_model}")
 
     # Initialize evolver
     output_dir = None if args.output_dir.lower() == "none" else args.output_dir

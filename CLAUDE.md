@@ -60,6 +60,8 @@ Detailed implementation specs are in the `specs/` directory:
 | `phase-08-main-entry-point.md` | CLI implementation |
 | `phase-09-testing.md` | Test structure and cases |
 | `phase-10-documentation.md` | Documentation and extensions |
+| `phase-11-strategy-persistence.md` | Strategy persistence to disk |
+| `phase-12-dual-model-llm.md` | Dual-model LLM configuration |
 
 **Always consult the relevant spec file before implementing a phase.**
 

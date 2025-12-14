@@ -41,13 +41,22 @@ class StrategyPersister:
         self.run_dir: Path | None = None
         self.run_id: str | None = None
 
-    def start_run(self, seed_strategy_name: str, provider: str, model: str) -> Path:
+    def start_run(
+        self,
+        seed_strategy_name: str,
+        analyst_provider: str,
+        analyst_model: str,
+        coder_provider: str,
+        coder_model: str,
+    ) -> Path:
         """Initialize a new run directory.
 
         Args:
             seed_strategy_name: Name of the seed strategy being evolved.
-            provider: LLM provider (openai/anthropic).
-            model: LLM model name.
+            analyst_provider: LLM provider for analysis role.
+            analyst_model: LLM model for analysis role.
+            coder_provider: LLM provider for coding role.
+            coder_model: LLM model for coding role.
 
         Returns:
             Path to the run directory.
@@ -60,8 +69,16 @@ class StrategyPersister:
             "run_id": self.run_id,
             "started_at": datetime.now().isoformat(),
             "seed_strategy": seed_strategy_name,
-            "llm_provider": provider,
-            "llm_model": model,
+            "llm_config": {
+                "analyst": {
+                    "provider": analyst_provider,
+                    "model": analyst_model,
+                },
+                "coder": {
+                    "provider": coder_provider,
+                    "model": coder_model,
+                },
+            },
             "folds": [],
         }
         self._write_json(self.run_dir / "run_summary.json", run_info)
@@ -584,8 +601,10 @@ class ProfitEvolver:
         if self.persister:
             run_dir = self.persister.start_run(
                 seed_strategy_name=strategy_class.__name__,
-                provider=self.llm.provider,
-                model=self.llm.model or "default",
+                analyst_provider=self.llm.analyst_provider,
+                analyst_model=self.llm.analyst_model,
+                coder_provider=self.llm.coder_provider,
+                coder_model=self.llm.coder_model,
             )
             print(f"Saving evolved strategies to: {run_dir}")
 

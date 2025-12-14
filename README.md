@@ -81,11 +81,27 @@ See [docs/data-sources.md](docs/data-sources.md) for full documentation.
 |-----------|---------|-------------|
 | `--data` | Required | Path to OHLCV CSV file |
 | `--strategy` | EMACrossover | Seed strategy to evolve |
-| `--provider` | openai | LLM provider (openai/anthropic) |
-| `--model` | gpt-4 | LLM model name |
+| `--provider` | openai | Default LLM provider (openai/anthropic) |
+| `--model` | gpt-4 | Default LLM model name |
+| `--analyst-provider` | (from --provider) | LLM provider for analysis/improvements |
+| `--analyst-model` | (from --model) | LLM model for analysis/improvements |
+| `--coder-provider` | (from --provider) | LLM provider for code generation |
+| `--coder-model` | (from --model) | LLM model for code generation |
 | `--folds` | 5 | Number of walk-forward folds |
 | `--capital` | 10000 | Initial capital |
 | `--commission` | 0.002 | Commission rate (0.2%) |
+| `--output-dir` | evolved_strategies | Directory to save evolved strategies |
+
+### Dual-Model Configuration
+
+Use different LLMs for analysis vs coding to optimize each role:
+
+```bash
+# Use GPT-4 for analysis, Claude Sonnet for coding
+uv run python -m profit.main --data data/ES_daily.csv --strategy EMACrossover \
+    --analyst-provider openai --analyst-model gpt-4 \
+    --coder-provider anthropic --coder-model claude-sonnet-4-20250514
+```
 
 ## Data Format
 

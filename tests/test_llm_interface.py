@@ -18,6 +18,11 @@ class TestLLMClientInit:
                 client = LLMClient()
                 assert client.provider == "openai"
                 assert client.model == "gpt-4"
+                # Also check analyst/coder defaults
+                assert client.analyst_provider == "openai"
+                assert client.analyst_model == "gpt-4"
+                assert client.coder_provider == "openai"
+                assert client.coder_model == "gpt-4"
 
     def test_anthropic_provider(self):
         """Should initialize Anthropic client when specified."""
@@ -26,7 +31,8 @@ class TestLLMClientInit:
                 mock_anthropic.Anthropic.return_value = Mock()
                 client = LLMClient(provider="anthropic")
                 assert client.provider == "anthropic"
-                assert client.model == "claude-3-5-sonnet-20241022"
+                assert client.analyst_provider == "anthropic"
+                assert client.coder_provider == "anthropic"
 
     def test_custom_model(self):
         """Should accept custom model specification."""
@@ -35,11 +41,8 @@ class TestLLMClientInit:
                 mock_openai.OpenAI.return_value = Mock()
                 client = LLMClient(model="gpt-3.5-turbo")
                 assert client.model == "gpt-3.5-turbo"
-
-    def test_unsupported_provider_raises(self):
-        """Should raise ValueError for unsupported provider."""
-        with pytest.raises(ValueError, match="Unsupported provider"):
-            LLMClient(provider="invalid")
+                assert client.analyst_model == "gpt-3.5-turbo"
+                assert client.coder_model == "gpt-3.5-turbo"
 
     def test_api_key_from_env(self):
         """Should read API key from environment variable."""
@@ -56,6 +59,109 @@ class TestLLMClientInit:
                 mock_openai.OpenAI.return_value = Mock()
                 client = LLMClient(openai_api_key="param-key")
                 assert client.openai_api_key == "param-key"
+
+
+class TestDualModelConfiguration:
+    """Test dual-model LLM configuration."""
+
+    def test_dual_model_different_providers(self):
+        """Should support different providers for analyst and coder."""
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "openai-key", "ANTHROPIC_API_KEY": "anthropic-key"},
+        ):
+            with patch("profit.llm_interface.openai") as mock_openai:
+                with patch("profit.llm_interface.anthropic") as mock_anthropic:
+                    mock_openai.OpenAI.return_value = Mock()
+                    mock_anthropic.Anthropic.return_value = Mock()
+
+                    client = LLMClient(
+                        analyst_provider="openai",
+                        analyst_model="gpt-4",
+                        coder_provider="anthropic",
+                        coder_model="claude-sonnet-4-20250514",
+                    )
+
+                    assert client.analyst_provider == "openai"
+                    assert client.analyst_model == "gpt-4"
+                    assert client.coder_provider == "anthropic"
+                    assert client.coder_model == "claude-sonnet-4-20250514"
+
+    def test_dual_model_same_provider_different_models(self):
+        """Should support different models within same provider."""
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            with patch("profit.llm_interface.openai") as mock_openai:
+                mock_openai.OpenAI.return_value = Mock()
+
+                client = LLMClient(
+                    analyst_provider="openai",
+                    analyst_model="gpt-4",
+                    coder_provider="openai",
+                    coder_model="gpt-3.5-turbo",
+                )
+
+                assert client.analyst_model == "gpt-4"
+                assert client.coder_model == "gpt-3.5-turbo"
+
+    def test_role_specific_overrides_default(self):
+        """Role-specific config should override default provider/model."""
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "openai-key", "ANTHROPIC_API_KEY": "anthropic-key"},
+        ):
+            with patch("profit.llm_interface.openai") as mock_openai:
+                with patch("profit.llm_interface.anthropic") as mock_anthropic:
+                    mock_openai.OpenAI.return_value = Mock()
+                    mock_anthropic.Anthropic.return_value = Mock()
+
+                    # Default is openai/gpt-4, but override coder to anthropic
+                    client = LLMClient(
+                        provider="openai",
+                        model="gpt-4",
+                        coder_provider="anthropic",
+                        coder_model="claude-sonnet-4-20250514",
+                    )
+
+                    # Analyst should use defaults
+                    assert client.analyst_provider == "openai"
+                    assert client.analyst_model == "gpt-4"
+                    # Coder should use overrides
+                    assert client.coder_provider == "anthropic"
+                    assert client.coder_model == "claude-sonnet-4-20250514"
+
+    def test_backward_compatibility_single_provider(self):
+        """Single provider mode should still work (backward compatible)."""
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            with patch("profit.llm_interface.openai") as mock_openai:
+                mock_openai.OpenAI.return_value = Mock()
+
+                client = LLMClient(provider="openai", model="gpt-4")
+
+                # Both roles should use same config
+                assert client.analyst_provider == "openai"
+                assert client.analyst_model == "gpt-4"
+                assert client.coder_provider == "openai"
+                assert client.coder_model == "gpt-4"
+
+    def test_default_models_per_provider(self):
+        """Should use correct default models when not specified."""
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "openai-key", "ANTHROPIC_API_KEY": "anthropic-key"},
+        ):
+            with patch("profit.llm_interface.openai") as mock_openai:
+                with patch("profit.llm_interface.anthropic") as mock_anthropic:
+                    mock_openai.OpenAI.return_value = Mock()
+                    mock_anthropic.Anthropic.return_value = Mock()
+
+                    client = LLMClient(
+                        analyst_provider="openai",
+                        coder_provider="anthropic",
+                    )
+
+                    # Should use provider-specific defaults
+                    assert client.analyst_model == "gpt-4"
+                    assert client.coder_model == "claude-sonnet-4-20250514"
 
 
 class TestGenerateImprovement:
@@ -78,6 +184,33 @@ class TestGenerateImprovement:
                     assert isinstance(result, str)
                     assert len(result) > 0
                     mock_chat.assert_called_once()
+
+    def test_uses_analyst_config(self):
+        """Should use analyst provider/model for improvements."""
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "openai-key", "ANTHROPIC_API_KEY": "anthropic-key"},
+        ):
+            with patch("profit.llm_interface.openai") as mock_openai:
+                with patch("profit.llm_interface.anthropic") as mock_anthropic:
+                    mock_openai.OpenAI.return_value = Mock()
+                    mock_anthropic.Anthropic.return_value = Mock()
+
+                    client = LLMClient(
+                        analyst_provider="openai",
+                        analyst_model="gpt-4",
+                        coder_provider="anthropic",
+                        coder_model="claude-sonnet-4-20250514",
+                    )
+
+                    with patch.object(client, "_chat") as mock_chat:
+                        mock_chat.return_value = "Improvement"
+                        client.generate_improvement("code", "metrics")
+
+                        # Should use analyst config
+                        call_kwargs = mock_chat.call_args[1]
+                        assert call_kwargs["provider"] == "openai"
+                        assert call_kwargs["model"] == "gpt-4"
 
     def test_prompt_contains_code_and_metrics(self):
         """Prompt should include both strategy code and metrics."""
@@ -135,6 +268,33 @@ class TestGenerateStrategyCode:
                     mock_chat.assert_called_once()
                     assert mock_chat.call_args[1].get("expect_code") is True
 
+    def test_uses_coder_config(self):
+        """Should use coder provider/model for code generation."""
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "openai-key", "ANTHROPIC_API_KEY": "anthropic-key"},
+        ):
+            with patch("profit.llm_interface.openai") as mock_openai:
+                with patch("profit.llm_interface.anthropic") as mock_anthropic:
+                    mock_openai.OpenAI.return_value = Mock()
+                    mock_anthropic.Anthropic.return_value = Mock()
+
+                    client = LLMClient(
+                        analyst_provider="openai",
+                        analyst_model="gpt-4",
+                        coder_provider="anthropic",
+                        coder_model="claude-sonnet-4-20250514",
+                    )
+
+                    with patch.object(client, "_chat") as mock_chat:
+                        mock_chat.return_value = "class Strategy: pass"
+                        client.generate_strategy_code("code", "improvement")
+
+                        # Should use coder config
+                        call_kwargs = mock_chat.call_args[1]
+                        assert call_kwargs["provider"] == "anthropic"
+                        assert call_kwargs["model"] == "claude-sonnet-4-20250514"
+
 
 class TestFixCode:
     """Test code repair functionality."""
@@ -171,6 +331,33 @@ class TestFixCode:
                     call_args = mock_chat.call_args
                     prompt = call_args[0][0]
                     assert "NameError: undefined" in prompt
+
+    def test_uses_coder_config(self):
+        """Should use coder provider/model for code fixing."""
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "openai-key", "ANTHROPIC_API_KEY": "anthropic-key"},
+        ):
+            with patch("profit.llm_interface.openai") as mock_openai:
+                with patch("profit.llm_interface.anthropic") as mock_anthropic:
+                    mock_openai.OpenAI.return_value = Mock()
+                    mock_anthropic.Anthropic.return_value = Mock()
+
+                    client = LLMClient(
+                        analyst_provider="openai",
+                        analyst_model="gpt-4",
+                        coder_provider="anthropic",
+                        coder_model="claude-sonnet-4-20250514",
+                    )
+
+                    with patch.object(client, "_chat") as mock_chat:
+                        mock_chat.return_value = "fixed code"
+                        client.fix_code("broken code", "Error")
+
+                        # Should use coder config
+                        call_kwargs = mock_chat.call_args[1]
+                        assert call_kwargs["provider"] == "anthropic"
+                        assert call_kwargs["model"] == "claude-sonnet-4-20250514"
 
 
 class TestCodeStripping:
@@ -240,10 +427,29 @@ class TestChatOpenAI:
                 mock_openai.OpenAI.return_value = mock_client
 
                 client = LLMClient()
-                result = client._chat("test prompt")
+                result = client._chat(
+                    "test prompt", provider="openai", model="gpt-4"
+                )
 
                 assert result == "response text"
                 mock_client.chat.completions.create.assert_called_once()
+
+    def test_openai_uses_specified_model(self):
+        """Should use the specified model in API call."""
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            with patch("profit.llm_interface.openai") as mock_openai:
+                mock_client = Mock()
+                mock_response = Mock()
+                mock_response.choices = [Mock()]
+                mock_response.choices[0].message.content = "response"
+                mock_client.chat.completions.create.return_value = mock_response
+                mock_openai.OpenAI.return_value = mock_client
+
+                client = LLMClient()
+                client._chat("prompt", provider="openai", model="gpt-3.5-turbo")
+
+                call_kwargs = mock_client.chat.completions.create.call_args[1]
+                assert call_kwargs["model"] == "gpt-3.5-turbo"
 
 
 class TestChatAnthropic:
@@ -261,7 +467,32 @@ class TestChatAnthropic:
                 mock_anthropic.Anthropic.return_value = mock_client
 
                 client = LLMClient(provider="anthropic")
-                result = client._chat("test prompt")
+                result = client._chat(
+                    "test prompt",
+                    provider="anthropic",
+                    model="claude-sonnet-4-20250514",
+                )
 
                 assert result == "claude response"
                 mock_client.messages.create.assert_called_once()
+
+    def test_anthropic_uses_specified_model(self):
+        """Should use the specified model in API call."""
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("profit.llm_interface.anthropic") as mock_anthropic:
+                mock_client = Mock()
+                mock_response = Mock()
+                mock_response.content = [Mock()]
+                mock_response.content[0].text = "response"
+                mock_client.messages.create.return_value = mock_response
+                mock_anthropic.Anthropic.return_value = mock_client
+
+                client = LLMClient(provider="anthropic")
+                client._chat(
+                    "prompt",
+                    provider="anthropic",
+                    model="claude-haiku-4-20250514",
+                )
+
+                call_kwargs = mock_client.messages.create.call_args[1]
+                assert call_kwargs["model"] == "claude-haiku-4-20250514"

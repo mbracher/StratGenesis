@@ -4,6 +4,8 @@ This module contains the LLMClient class for OpenAI/Anthropic integration.
 It implements the two-LLM architecture from the ProFiT paper:
 - LLM A (Analyst): Analyzes strategy and proposes improvements
 - LLM B (Coder): Applies improvements to generate new code
+
+Supports using different providers/models for each role (dual-model configuration).
 """
 
 import os
@@ -19,61 +21,108 @@ try:
 except ImportError:
     anthropic = None
 
+# Default models per provider
+DEFAULT_MODELS = {
+    "openai": "gpt-4",
+    "anthropic": "claude-sonnet-4-20250514",
+}
+
 
 class LLMClient:
-    """Interface to LLMs (OpenAI GPT or Anthropic Claude) for generating and modifying strategy code."""
+    """Interface to LLMs for generating and modifying strategy code.
+
+    Supports using different providers/models for the analyst and coder roles.
+    """
 
     def __init__(
         self,
-        provider: str = "openai",
+        provider: str | None = None,
         model: str | None = None,
+        analyst_provider: str | None = None,
+        analyst_model: str | None = None,
+        coder_provider: str | None = None,
+        coder_model: str | None = None,
         openai_api_key: str | None = None,
         anthropic_api_key: str | None = None,
     ):
         """Initialize the LLM client.
 
         Args:
-            provider: "openai" or "anthropic"
-            model: Model name (e.g., "gpt-4" or "claude-3-opus-20240229").
-                   If None, uses a default for each provider.
+            provider: Default provider for both roles ("openai" or "anthropic").
+                      Used if role-specific providers not set. Defaults to "openai".
+            model: Default model for both roles. Used if role-specific models not set.
+            analyst_provider: Provider for LLM A (analysis/improvement suggestions).
+            analyst_model: Model for LLM A.
+            coder_provider: Provider for LLM B (code generation/fixing).
+            coder_model: Model for LLM B.
             openai_api_key: OpenAI API key. Falls back to OPENAI_API_KEY env var.
             anthropic_api_key: Anthropic API key. Falls back to ANTHROPIC_API_KEY env var.
-        """
-        self.provider = provider
 
-        # Use API keys from environment if not provided
+        Examples:
+            # Single provider (backward compatible)
+            client = LLMClient(provider="anthropic", model="claude-sonnet-4-20250514")
+
+            # Dual-model: OpenAI for analysis, Anthropic for coding
+            client = LLMClient(
+                analyst_provider="openai",
+                analyst_model="gpt-4",
+                coder_provider="anthropic",
+                coder_model="claude-sonnet-4-20250514",
+            )
+        """
+        # Store API keys
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.anthropic_api_key = anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")
 
-        # Default models
-        if model:
-            self.model = model
-        else:
-            self.model = "gpt-4" if provider == "openai" else "claude-3-5-sonnet-20241022"
+        # Resolve default provider
+        default_provider = provider or "openai"
 
-        # Initialize clients
-        if provider == "anthropic":
-            if anthropic is None:
-                raise ImportError(
-                    "anthropic SDK not installed. Install via `uv add anthropic`"
-                )
-            self.anthropic_client = anthropic.Anthropic(api_key=self.anthropic_api_key)
-            self.openai_client = None
-        elif provider == "openai":
+        # Resolve analyst configuration
+        self.analyst_provider = analyst_provider or default_provider
+        self.analyst_model = (
+            analyst_model or model or DEFAULT_MODELS.get(self.analyst_provider, "gpt-4")
+        )
+
+        # Resolve coder configuration
+        self.coder_provider = coder_provider or default_provider
+        self.coder_model = (
+            coder_model or model or DEFAULT_MODELS.get(self.coder_provider, "gpt-4")
+        )
+
+        # Legacy attributes for backward compatibility
+        self.provider = default_provider
+        self.model = model or DEFAULT_MODELS.get(default_provider, "gpt-4")
+
+        # Initialize API clients for providers in use
+        self._clients: dict = {}
+        self._init_clients()
+
+    def _init_clients(self) -> None:
+        """Initialize API clients for providers in use."""
+        providers_needed = {self.analyst_provider, self.coder_provider}
+
+        if "openai" in providers_needed:
             if openai is None:
                 raise ImportError(
                     "openai SDK not installed. Install via `uv add openai`"
                 )
-            self.openai_client = openai.OpenAI(api_key=self.openai_api_key)
-            self.anthropic_client = None
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
+            self._clients["openai"] = openai.OpenAI(api_key=self.openai_api_key)
+
+        if "anthropic" in providers_needed:
+            if anthropic is None:
+                raise ImportError(
+                    "anthropic SDK not installed. Install via `uv add anthropic`"
+                )
+            self._clients["anthropic"] = anthropic.Anthropic(
+                api_key=self.anthropic_api_key
+            )
 
     def generate_improvement(self, strategy_code: str, metrics_summary: str) -> str:
         """Ask the LLM to analyze the strategy code and performance metrics,
         and suggest an improvement (natural language description).
 
         This is LLM A in the ProFiT loop - the analyst role.
+        Uses analyst_provider and analyst_model configuration.
 
         Args:
             strategy_code: The current strategy's Python code
@@ -91,12 +140,18 @@ class LLMClient:
             f"Performance Summary: {metrics_summary}\n\n"
             "Please suggest one concrete improvement (in a brief bullet or sentence)."
         )
-        return self._chat(prompt, expect_code=False)
+        return self._chat(
+            prompt,
+            provider=self.analyst_provider,
+            model=self.analyst_model,
+            expect_code=False,
+        )
 
     def generate_strategy_code(self, base_code: str, improvement_proposal: str) -> str:
         """Ask the LLM to apply the proposed improvement to the base strategy code.
 
         This is LLM B in the ProFiT loop - the coder role.
+        Uses coder_provider and coder_model configuration.
 
         Args:
             base_code: The original strategy Python code
@@ -115,10 +170,17 @@ class LLMClient:
             "Improvement to implement: " + improvement_proposal + "\n\n"
             "Now output the full updated strategy code (only code, no comments or explanation)."
         )
-        return self._chat(prompt, expect_code=True)
+        return self._chat(
+            prompt,
+            provider=self.coder_provider,
+            model=self.coder_model,
+            expect_code=True,
+        )
 
     def fix_code(self, base_code: str, error_trace: str) -> str:
         """If the generated code fails, prompt the LLM to fix the error given the traceback.
+
+        Uses coder_provider and coder_model configuration.
 
         Args:
             base_code: The code that failed to compile/run
@@ -135,33 +197,48 @@ class LLMClient:
             "```python\n" + base_code + "\n```\n"
             "Now output the fixed code."
         )
-        return self._chat(prompt, expect_code=True)
+        return self._chat(
+            prompt,
+            provider=self.coder_provider,
+            model=self.coder_model,
+            expect_code=True,
+        )
 
-    def _chat(self, prompt: str, expect_code: bool = False) -> str:
-        """Internal helper to send chat prompt to the chosen provider and return response text.
+    def _chat(
+        self,
+        prompt: str,
+        provider: str,
+        model: str,
+        expect_code: bool = False,
+    ) -> str:
+        """Internal helper to send chat prompt to the specified provider/model.
 
         Args:
             prompt: The prompt to send to the LLM
+            provider: Which provider to use ("openai" or "anthropic")
+            model: Which model to use
             expect_code: If True, strip markdown code fences from response
 
         Returns:
             The LLM's response text
         """
-        if self.provider == "openai":
-            response = self.openai_client.chat.completions.create(
-                model=self.model,
+        if provider == "openai":
+            client = self._clients["openai"]
+            response = client.chat.completions.create(
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
             )
             text = response.choices[0].message.content
-        elif self.provider == "anthropic":
-            response = self.anthropic_client.messages.create(
-                model=self.model,
+        elif provider == "anthropic":
+            client = self._clients["anthropic"]
+            response = client.messages.create(
+                model=model,
                 max_tokens=4096,
                 messages=[{"role": "user", "content": prompt}],
             )
             text = response.content[0].text
         else:
-            raise ValueError(f"Unsupported provider: {self.provider}")
+            raise ValueError(f"Unsupported provider: {provider}")
 
         # If expecting code, strip markdown fences
         if expect_code:

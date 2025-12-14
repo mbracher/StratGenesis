@@ -221,7 +221,13 @@ class TestStrategyPersister:
         """Should create run directory."""
         with tempfile.TemporaryDirectory() as tmpdir:
             persister = StrategyPersister(tmpdir)
-            run_dir = persister.start_run("TestStrategy", "openai", "gpt-4")
+            run_dir = persister.start_run(
+                "TestStrategy",
+                analyst_provider="openai",
+                analyst_model="gpt-4",
+                coder_provider="openai",
+                coder_model="gpt-4",
+            )
 
             assert run_dir.exists()
             assert run_dir.parent == Path(tmpdir)
@@ -231,22 +237,36 @@ class TestStrategyPersister:
         """Should create initial run summary."""
         with tempfile.TemporaryDirectory() as tmpdir:
             persister = StrategyPersister(tmpdir)
-            run_dir = persister.start_run("TestStrategy", "openai", "gpt-4")
+            run_dir = persister.start_run(
+                "TestStrategy",
+                analyst_provider="openai",
+                analyst_model="gpt-4",
+                coder_provider="anthropic",
+                coder_model="claude-sonnet-4-20250514",
+            )
 
             summary_path = run_dir / "run_summary.json"
             assert summary_path.exists()
 
             summary = json.loads(summary_path.read_text())
             assert summary["seed_strategy"] == "TestStrategy"
-            assert summary["llm_provider"] == "openai"
-            assert summary["llm_model"] == "gpt-4"
+            assert summary["llm_config"]["analyst"]["provider"] == "openai"
+            assert summary["llm_config"]["analyst"]["model"] == "gpt-4"
+            assert summary["llm_config"]["coder"]["provider"] == "anthropic"
+            assert summary["llm_config"]["coder"]["model"] == "claude-sonnet-4-20250514"
             assert summary["folds"] == []
 
     def test_save_strategy_creates_files(self):
         """Should create .py and .json files for strategy."""
         with tempfile.TemporaryDirectory() as tmpdir:
             persister = StrategyPersister(tmpdir)
-            persister.start_run("TestStrategy", "openai", "gpt-4")
+            persister.start_run(
+                "TestStrategy",
+                analyst_provider="openai",
+                analyst_model="gpt-4",
+                coder_provider="openai",
+                coder_model="gpt-4",
+            )
 
             metrics = {"AnnReturn%": 15.5, "Sharpe": 1.2}
             strategy_path = persister.save_strategy(
@@ -279,7 +299,13 @@ class TestStrategyPersister:
         """Should create best_strategy.py file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             persister = StrategyPersister(tmpdir)
-            persister.start_run("TestStrategy", "openai", "gpt-4")
+            persister.start_run(
+                "TestStrategy",
+                analyst_provider="openai",
+                analyst_model="gpt-4",
+                coder_provider="openai",
+                coder_model="gpt-4",
+            )
 
             metrics = {"AnnReturn%": 20.0, "Sharpe": 1.5}
             best_path = persister.save_fold_best(
@@ -296,7 +322,13 @@ class TestStrategyPersister:
         """Should update summary with fold results."""
         with tempfile.TemporaryDirectory() as tmpdir:
             persister = StrategyPersister(tmpdir)
-            persister.start_run("TestStrategy", "openai", "gpt-4")
+            persister.start_run(
+                "TestStrategy",
+                analyst_provider="openai",
+                analyst_model="gpt-4",
+                coder_provider="openai",
+                coder_model="gpt-4",
+            )
 
             # Create a fold directory with best_strategy.py
             fold_dir = persister.run_dir / "fold_1"
@@ -326,7 +358,13 @@ class TestStrategyPersister:
         """Should copy best strategy to root."""
         with tempfile.TemporaryDirectory() as tmpdir:
             persister = StrategyPersister(tmpdir)
-            persister.start_run("TestStrategy", "openai", "gpt-4")
+            persister.start_run(
+                "TestStrategy",
+                analyst_provider="openai",
+                analyst_model="gpt-4",
+                coder_provider="openai",
+                coder_model="gpt-4",
+            )
 
             # Create fold directories with best strategies
             fold1_dir = persister.run_dir / "fold_1"
