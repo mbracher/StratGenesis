@@ -1270,6 +1270,11 @@ class ParetoPolicy:
 
     objectives: tuple = ("ann_return", "sharpe", "max_drawdown")
     # For max_drawdown, less negative is better (maximize)
+    # Note: max_drawdown is stored as negative (e.g., -15.0 for 15% drawdown)
+    # Less negative = better, so -10% > -20% means -10% is better
+
+    # Debug logging flag
+    debug: bool = False
 
     def compute_fitness(self, metrics: StrategyMetrics) -> float:
         """Fitness is sum of objective values (for ranking)."""
@@ -1279,24 +1284,49 @@ class ParetoPolicy:
         )
 
     def dominates(self, a: StrategyMetrics, b: StrategyMetrics) -> bool:
-        """Check if strategy A dominates strategy B."""
-        dominated = True
-        strictly_better = False
+        """
+        Check if strategy A dominates strategy B.
+
+        A dominates B if:
+        - A is at least as good as B on ALL objectives
+        - A is strictly better than B on AT LEAST ONE objective
+
+        For all objectives (including max_drawdown), higher values are better:
+        - ann_return: higher % is better
+        - sharpe: higher ratio is better
+        - max_drawdown: less negative is better (e.g., -10% > -20%)
+        """
+        at_least_as_good_all = True  # A >= B on all objectives
+        strictly_better_one = False  # A > B on at least one objective
+
+        if self.debug:
+            print(f"    [Pareto] Checking dominance: A vs B")
 
         for obj in self.objectives:
             val_a = getattr(a, obj)
             val_b = getattr(b, obj)
 
-            # For max_drawdown, less negative is better
-            if obj == "max_drawdown":
-                val_a, val_b = -val_a, -val_b
+            # All objectives use "higher is better" semantics
+            # max_drawdown: -10% > -20%, so -10% is better (no negation needed!)
+
+            if self.debug:
+                better_symbol = ">" if val_a > val_b else ("<" if val_a < val_b else "=")
+                print(f"      {obj}: A={val_a:.2f} {better_symbol} B={val_b:.2f}")
 
             if val_a < val_b:
-                dominated = False
+                at_least_as_good_all = False  # A is worse than B on this objective
             if val_a > val_b:
-                strictly_better = True
+                strictly_better_one = True  # A is strictly better on this objective
 
-        return dominated and strictly_better
+        result = at_least_as_good_all and strictly_better_one
+
+        if self.debug:
+            print(
+                f"      Result: at_least_as_good_all={at_least_as_good_all}, "
+                f"strictly_better_one={strictly_better_one} => dominates={result}"
+            )
+
+        return result
 
     def should_accept(
         self,
@@ -1313,9 +1343,29 @@ class ParetoPolicy:
         # Use population if provided, otherwise just compare to baseline
         comparison_set = population_metrics if population_metrics else [baseline]
 
-        for existing in comparison_set:
+        if self.debug:
+            print(f"  [Pareto] should_accept called:")
+            print(
+                f"    Candidate: return={candidate.ann_return:.2f}%, "
+                f"sharpe={candidate.sharpe:.2f}, dd={candidate.max_drawdown:.2f}%"
+            )
+            print(f"    Population size: {len(comparison_set)}")
+
+        for i, existing in enumerate(comparison_set):
+            if self.debug:
+                print(
+                    f"    Comparing against population[{i}]: "
+                    f"return={existing.ann_return:.2f}%, "
+                    f"sharpe={existing.sharpe:.2f}, dd={existing.max_drawdown:.2f}%"
+                )
+
             if self.dominates(existing, candidate):
+                if self.debug:
+                    print(f"    => REJECTED: dominated by population[{i}]")
                 return False  # Dominated by existing strategy
+
+        if self.debug:
+            print(f"    => ACCEPTED: not dominated by any existing strategy")
 
         return True
 
@@ -1335,6 +1385,7 @@ def create_selection_policy(
     Args:
         policy_type: One of 'weighted', 'gated', 'pareto'
         **kwargs: Policy-specific parameters
+            - debug: bool - Enable debug logging for policy decisions
 
     Returns:
         SelectionPolicy instance
@@ -1353,6 +1404,7 @@ def create_selection_policy(
             objectives=tuple(
                 kwargs.get("objectives", ["ann_return", "sharpe", "max_drawdown"])
             ),
+            debug=kwargs.get("debug", False),
         )
     else:  # default: gated
         return GatedMASPolicy(

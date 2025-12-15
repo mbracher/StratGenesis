@@ -104,10 +104,14 @@ See [docs/data-sources.md](docs/data-sources.md) for full documentation.
 | `--diff-match` | tolerant | Diff matching: strict (literal) or tolerant |
 | `--exploration-gens` | 5 | In adaptive mode, use rewrites for first N gens |
 | `--selection-policy` | (none) | Selection policy: weighted, gated, or pareto |
-| `--min-return` | 0.0 | Minimum annualized return threshold |
-| `--min-sharpe` | 0.0 | Minimum Sharpe ratio threshold |
-| `--max-drawdown` | -50.0 | Maximum drawdown threshold (negative) |
-| `--min-trades` | 1 | Minimum number of trades required |
+| `--min-return` | 0.0 | Minimum annualized return threshold (gated policy) |
+| `--min-sharpe` | 0.0 | Minimum Sharpe ratio threshold (gated policy) |
+| `--max-drawdown` | -50.0 | Maximum drawdown threshold (gated policy) |
+| `--min-trades` | 1 | Minimum number of trades (gated policy) |
+| `--gate-min-trades` | 1 | Promotion gate: minimum trades before policy check |
+| `--gate-max-drawdown` | -80.0 | Promotion gate: max drawdown limit |
+| `--gate-min-sharpe` | (none) | Promotion gate: minimum Sharpe ratio |
+| `--gate-min-win-rate` | (none) | Promotion gate: minimum win rate (%) |
 
 ### Dual-Model Configuration
 
@@ -145,13 +149,29 @@ uv run python -m profit.main --data data/ES_daily.csv --exploration-gens 10
 
 ### Multi-Metric Evaluation
 
-ProFiT supports multi-objective strategy selection with three policies:
+ProFiT uses a two-stage evaluation process:
+
+1. **Evaluation Cascade** - Fast rejection of invalid strategies:
+   - Syntax check (~1ms) - Parse and compile code
+   - Smoke test (~1s) - Quick backtest on 3 months of data
+   - Single-fold evaluation (~10s) - Full backtest + **promotion gate**
+
+2. **Selection Policy** - Multi-objective acceptance for strategies that pass the cascade
+
+The **promotion gate** (`--gate-*` arguments) filters out junk strategies early, before the selection policy runs. This saves compute and prevents strategies with 0 trades or extreme drawdowns from polluting the population.
+
+**Selection Policies:**
 
 - **GatedMAS** (`--selection-policy gated`): Multi-gate acceptance requiring strategies to pass all thresholds (return, Sharpe, drawdown, trades) AND beat the baseline
 - **WeightedSum** (`--selection-policy weighted`): Weighted combination of metrics with baseline-relative normalization
 - **Pareto** (`--selection-policy pareto`): Accept non-dominated strategies for diverse Pareto frontier exploration
 
 ```bash
+# Use Pareto policy with promotion gate thresholds
+uv run python -m profit.main --data data/ES_daily.csv \
+    --selection-policy pareto \
+    --gate-min-sharpe -2.0 --gate-min-win-rate 20.0
+
 # Use gated policy with custom thresholds
 uv run python -m profit.main --data data/ES_daily.csv \
     --selection-policy gated --min-sharpe 0.5 --max-drawdown -30

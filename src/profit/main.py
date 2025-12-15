@@ -288,6 +288,12 @@ def main() -> int:
         default=["ann_return", "sharpe", "max_drawdown"],
         help="Objectives for Pareto selection (default: ann_return sharpe max_drawdown)",
     )
+    # Debug flag for selection policy
+    parser.add_argument(
+        "--debug-policy",
+        action="store_true",
+        help="Enable debug logging for selection policy decisions (Pareto dominance checks)",
+    )
     # Cascade configuration
     parser.add_argument(
         "--skip-cascade",
@@ -323,6 +329,18 @@ def main() -> int:
         type=float,
         default=-80.0,
         help="Promotion gate: max drawdown limit (default: -80.0)",
+    )
+    parser.add_argument(
+        "--gate-min-sharpe",
+        type=float,
+        default=None,
+        help="Promotion gate: minimum Sharpe ratio (default: None = disabled)",
+    )
+    parser.add_argument(
+        "--gate-min-win-rate",
+        type=float,
+        default=None,
+        help="Promotion gate: minimum win rate %% (default: None = disabled)",
     )
 
     # Export command (alternative to deprecated output_dir)
@@ -480,8 +498,12 @@ from backtesting import Strategy
             w_drawdown=args.w_drawdown,
             # Pareto parameters
             objectives=args.pareto_objectives,
+            # Debug flag
+            debug=args.debug_policy,
         )
         print(f"Selection policy: {args.selection_policy}")
+        if args.debug_policy:
+            print("  Debug logging: ENABLED")
 
     # Phase 15: Build evaluation cascade if not skipped
     cascade = None
@@ -496,6 +518,8 @@ from backtesting import Strategy
         promotion_gate = PromotionGate(
             min_trades=args.gate_min_trades,
             max_drawdown_limit=args.gate_max_drawdown,
+            min_sharpe=args.gate_min_sharpe,
+            min_win_rate=args.gate_min_win_rate,
         )
 
         cascade_mode = "quick" if args.quick_eval else "standard"
@@ -509,6 +533,19 @@ from backtesting import Strategy
             verbose=True,
         )
         print(f"Evaluation cascade: {cascade_mode} mode")
+
+        # Log promotion gate settings if non-default
+        gate_settings = []
+        if args.gate_min_trades != 1:
+            gate_settings.append(f"min_trades={args.gate_min_trades}")
+        if args.gate_max_drawdown != -80.0:
+            gate_settings.append(f"max_dd={args.gate_max_drawdown}%")
+        if args.gate_min_sharpe is not None:
+            gate_settings.append(f"min_sharpe={args.gate_min_sharpe}")
+        if args.gate_min_win_rate is not None:
+            gate_settings.append(f"min_win_rate={args.gate_min_win_rate}%")
+        if gate_settings:
+            print(f"Promotion gate: {', '.join(gate_settings)}")
 
     # Run walk-forward optimization
     print(f"\nStarting walk-forward optimization with {args.folds} folds...")

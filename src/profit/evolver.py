@@ -613,22 +613,61 @@ class ProfitEvolver:
                     new_code = new_code.replace(parent_class.__name__, new_class_name, 1)
 
             # 8-11. Try to compile and backtest with repair loop
+            # Phase 15: Use cascade if provided for staged evaluation with promotion gate
             success = False
             NewStrategyClass = None
             res = None
             repair_count = 0  # Track number of repair attempts
+            gate_rejected = False  # Track if rejected by promotion gate (no retry)
 
             for attempt in range(1, 11):  # up to 10 repair attempts
                 try:
-                    # Dynamically define the new strategy class from code
-                    namespace = {}
-                    exec(new_code, exec_globals, namespace)
-                    NewStrategyClass = namespace[new_class_name]
+                    if cascade is not None:
+                        # Use cascade for staged evaluation with promotion gate
+                        from profit.evaluation import StageResult
 
-                    # Run backtest on validation data to get performance
-                    _, res = self.run_backtest(NewStrategyClass, val_data)
-                    success = True
-                    break
+                        cascade_result = cascade.evaluate(new_code, val_data)
+
+                        if cascade_result.passed:
+                            # All stages passed - load strategy and get full result
+                            namespace = {}
+                            exec(new_code, exec_globals, namespace)
+                            NewStrategyClass = namespace[new_class_name]
+                            _, res = self.run_backtest(NewStrategyClass, val_data)
+                            success = True
+                            break
+                        else:
+                            # Check if this is a gate rejection (code is valid but metrics fail)
+                            single_fold_output = cascade_result.stage_results.get("single_fold")
+                            if (single_fold_output is not None
+                                and single_fold_output.error is not None
+                                and "Promotion gate failed" in single_fold_output.error):
+                                # Gate rejection - code is valid, just didn't meet thresholds
+                                # Load strategy to get metrics for logging
+                                namespace = {}
+                                exec(new_code, exec_globals, namespace)
+                                NewStrategyClass = namespace[new_class_name]
+                                _, res = self.run_backtest(NewStrategyClass, val_data)
+                                gate_rejected = True
+                                print(f"  {single_fold_output.error}")
+                                break  # No retry for gate rejections
+                            else:
+                                # Code error - try to fix
+                                error_msg = cascade_result.stage_results.get(
+                                    cascade_result.final_stage
+                                )
+                                error_text = error_msg.error if error_msg else "Unknown error"
+                                raise RuntimeError(error_text)
+                    else:
+                        # Original flow without cascade
+                        namespace = {}
+                        exec(new_code, exec_globals, namespace)
+                        NewStrategyClass = namespace[new_class_name]
+
+                        # Run backtest on validation data to get performance
+                        _, res = self.run_backtest(NewStrategyClass, val_data)
+                        success = True
+                        break
 
                 except Exception as e:
                     repair_count = attempt  # Track how many repairs needed
@@ -652,8 +691,8 @@ class ProfitEvolver:
                 parent_class.__name__
             )
 
-            if not success:
-                # Register failed strategy in program DB
+            if not success and not gate_rejected:
+                # Code failed to compile/run - register as compile failed
                 if self.program_db:
                     from profit.program_db import StrategyStatus
 
@@ -673,6 +712,46 @@ class ProfitEvolver:
                     )
                     self._strategy_db_ids[new_class_name] = failed_id
                     print(f"[{failed_id}] Failed: {new_class_name} ({repair_count} repair attempts)")
+                continue  # Move to next generation
+
+            # Handle gate rejection (code is valid but failed promotion gate thresholds)
+            if gate_rejected:
+                # Extract metrics for logging and DB registration
+                P_new = res["Return (Ann.) [%]"]
+                new_metrics = self._extract_standard_metrics(res)
+                print(
+                    f"New strategy variant '{new_class_name}' achieved validation "
+                    f"annual return {P_new:.2f}%"
+                )
+                print(
+                    f"  Metrics: Sharpe={new_metrics.get('sharpe', 0):.2f}, "
+                    f"MaxDD={new_metrics.get('max_drawdown', 0):.2f}%, "
+                    f"Trades={new_metrics.get('trade_count', 0)}"
+                )
+
+                # Register as rejected (failed gate, not compile error)
+                if self.program_db:
+                    from profit.program_db import StrategyStatus
+
+                    rejected_id = self.program_db.register_strategy(
+                        code=new_code,
+                        class_name=new_class_name,
+                        parent_ids=[parent_db_id] if parent_db_id else [],
+                        mutation_text=improvement,
+                        metrics=new_metrics,
+                        tags=self._infer_tags(new_code),
+                        status=StrategyStatus.REJECTED,
+                        generation=gen,
+                        fold=fold,
+                        improvement_delta=P_new - parent_perf,
+                        diff_from_parent=diff_text or "",
+                        val_return=P_new,
+                        repair_attempts=repair_count,
+                    )
+                    self._strategy_db_ids[new_class_name] = rejected_id
+                    repairs_str = f", {repair_count} repairs" if repair_count > 0 else ""
+                    metrics_str = self._format_metrics_summary(new_metrics)
+                    print(f"[{rejected_id}] Rejected: {new_class_name} ({metrics_str}{repairs_str}, failed gate)")
                 continue  # Move to next generation
 
             # 14. Compute fitness of new strategy

@@ -379,6 +379,67 @@ class TestPromotionGate:
         assert passed is False
         assert "Drawdown too severe" in error
 
+    def test_fail_sharpe_too_low(self):
+        """Should fail if Sharpe ratio below threshold."""
+        gate = PromotionGate(min_trades=0, min_sharpe=-2.0)
+        metrics = StrategyMetrics(trade_count=0, sharpe=-3.5)
+        passed, error = gate.check(metrics)
+        assert passed is False
+        assert "Sharpe too low" in error
+
+    def test_pass_sharpe_above_threshold(self):
+        """Should pass if Sharpe ratio meets threshold."""
+        gate = PromotionGate(min_trades=0, min_sharpe=-2.0)
+        metrics = StrategyMetrics(trade_count=0, sharpe=-1.5)
+        passed, error = gate.check(metrics)
+        assert passed is True
+        assert error is None
+
+    def test_fail_win_rate_too_low(self):
+        """Should fail if win rate below threshold."""
+        gate = PromotionGate(min_trades=0, min_win_rate=30.0)
+        metrics = StrategyMetrics(trade_count=0, win_rate=20.0)
+        passed, error = gate.check(metrics)
+        assert passed is False
+        assert "Win rate too low" in error
+
+    def test_pass_win_rate_above_threshold(self):
+        """Should pass if win rate meets threshold."""
+        gate = PromotionGate(min_trades=0, min_win_rate=30.0)
+        metrics = StrategyMetrics(trade_count=0, win_rate=40.0)
+        passed, error = gate.check(metrics)
+        assert passed is True
+        assert error is None
+
+    def test_combined_gates(self):
+        """Should check all gates together."""
+        gate = PromotionGate(
+            min_trades=5,
+            max_drawdown_limit=-50.0,
+            min_sharpe=-2.0,
+            min_win_rate=25.0,
+        )
+        # Metrics that pass all gates
+        good_metrics = StrategyMetrics(
+            trade_count=10,
+            max_drawdown=-30.0,
+            sharpe=-1.0,
+            win_rate=35.0,
+        )
+        passed, error = gate.check(good_metrics)
+        assert passed is True
+
+        # Metrics that fail sharpe gate
+        bad_sharpe = StrategyMetrics(
+            trade_count=10,
+            max_drawdown=-30.0,
+            sharpe=-3.0,  # Below -2.0 threshold
+            win_rate=35.0,
+        )
+        passed, error = gate.check(bad_sharpe)
+        assert passed is False
+        assert "Sharpe too low" in error
+
 
 # ===========================================================================
 # Cascade Tests
@@ -566,6 +627,116 @@ class TestParetoPolicy:
 
         # Dominated by second strategy in population
         assert policy.should_accept(candidate, baseline, population_metrics=population) is False
+
+    def test_max_drawdown_dominance(self):
+        """Should correctly handle max_drawdown in dominance checks.
+
+        Bug fix test: max_drawdown is stored as negative (e.g., -15.0 means 15% drawdown).
+        Less negative = better (e.g., -10% > -20%, so -10% is better).
+        """
+        policy = ParetoPolicy(objectives=("ann_return", "sharpe", "max_drawdown"))
+
+        # Baseline: better on all metrics (higher return, higher sharpe, less negative drawdown)
+        baseline = StrategyMetrics(
+            ann_return=-15.86,
+            sharpe=-1.89,
+            max_drawdown=-13.27  # Less negative = less drawdown = better
+        )
+
+        # Candidate: worse on ALL metrics
+        candidate = StrategyMetrics(
+            ann_return=-24.50,  # Worse (more negative)
+            sharpe=-3.44,       # Worse (more negative)
+            max_drawdown=-15.23  # Worse (more negative = more drawdown)
+        )
+
+        # Baseline should dominate candidate (better on all objectives)
+        assert policy.dominates(baseline, candidate) is True
+
+        # Candidate should NOT dominate baseline
+        assert policy.dominates(candidate, baseline) is False
+
+        # Therefore, candidate should be REJECTED
+        assert policy.should_accept(candidate, baseline) is False
+
+    def test_max_drawdown_tradeoff(self):
+        """Should accept if max_drawdown creates a valid tradeoff."""
+        policy = ParetoPolicy(objectives=("ann_return", "sharpe", "max_drawdown"))
+
+        baseline = StrategyMetrics(
+            ann_return=10.0,
+            sharpe=1.0,
+            max_drawdown=-20.0  # 20% drawdown
+        )
+
+        # Candidate: worse return and sharpe, but BETTER drawdown
+        candidate = StrategyMetrics(
+            ann_return=8.0,      # Worse
+            sharpe=0.8,          # Worse
+            max_drawdown=-10.0   # Better (less negative = less drawdown)
+        )
+
+        # Neither should dominate (there's a valid tradeoff)
+        assert policy.dominates(baseline, candidate) is False
+        assert policy.dominates(candidate, baseline) is False
+
+        # Candidate should be accepted (non-dominated)
+        assert policy.should_accept(candidate, baseline) is True
+
+    def test_debug_logging(self, capsys):
+        """Debug mode should print decision details."""
+        policy = ParetoPolicy(
+            objectives=("ann_return", "sharpe", "max_drawdown"),
+            debug=True
+        )
+
+        baseline = StrategyMetrics(ann_return=10.0, sharpe=1.0, max_drawdown=-20.0)
+        candidate = StrategyMetrics(ann_return=5.0, sharpe=0.5, max_drawdown=-30.0)
+
+        # This should print debug info
+        policy.should_accept(candidate, baseline)
+
+        captured = capsys.readouterr()
+        assert "[Pareto] should_accept called" in captured.out
+        assert "Checking dominance" in captured.out
+
+    def test_regression_run_output_scenario(self):
+        """Regression test: exact scenario from user's run that showed the bug.
+
+        From the run output:
+        - Baseline: Return=-15.86%, Sharpe=-1.89, MaxDD=-13.27%
+        - EMACrossover_1: Return=-24.50%, Sharpe=-3.44, MaxDD=-15.23%
+
+        EMACrossover_1 is WORSE on ALL objectives but was incorrectly accepted.
+        After fix, it should be REJECTED.
+        """
+        policy = ParetoPolicy(
+            objectives=("ann_return", "sharpe", "max_drawdown")
+        )
+
+        # Baseline from actual run
+        baseline = StrategyMetrics(
+            ann_return=-15.86,
+            sharpe=-1.89,
+            max_drawdown=-13.27
+        )
+
+        # EMACrossover_1 from actual run - worse on ALL objectives
+        candidate = StrategyMetrics(
+            ann_return=-24.50,
+            sharpe=-3.44,
+            max_drawdown=-15.23
+        )
+
+        # Should be rejected (dominated by baseline)
+        result = policy.should_accept(candidate, baseline)
+        assert result is False, (
+            f"Expected rejection but got acceptance. "
+            f"Baseline dominates candidate on all objectives: "
+            f"return ({baseline.ann_return} > {candidate.ann_return}), "
+            f"sharpe ({baseline.sharpe} > {candidate.sharpe}), "
+            f"max_drawdown ({baseline.max_drawdown} > {candidate.max_drawdown})"
+        )
 
 
 # ===========================================================================
