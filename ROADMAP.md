@@ -22,7 +22,7 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | 10 | Documentation & Extensions | [`specs/phase-10-documentation.md`](specs/phase-10-documentation.md) | ✅ |
 | 11 | Strategy Persistence | [`specs/phase-11-strategy-persistence.md`](specs/phase-11-strategy-persistence.md) | ✅ |
 | 12 | Dual-Model LLM Configuration | [`specs/phase-12-dual-model-llm.md`](specs/phase-12-dual-model-llm.md) | ✅ |
-| 13 | Program Database | [`specs/phase-13-program-database.md`](specs/phase-13-program-database.md) | |
+| 13 | Program Database | [`specs/phase-13-program-database.md`](specs/phase-13-program-database.md) | 🔄 13A |
 | 14 | Diff-Based Mutations | [`specs/phase-14-diff-based-mutations.md`](specs/phase-14-diff-based-mutations.md) | |
 | 15 | Multi-Metric Evaluation | [`specs/phase-15-multi-metric-evaluation.md`](specs/phase-15-multi-metric-evaluation.md) | |
 | 16 | Research & Data Agents | [`specs/phase-16-research-data-agents.md`](specs/phase-16-research-data-agents.md) | |
@@ -217,14 +217,23 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 
 AlphaEvolve-style program database with backend abstraction for strategy storage, lineage tracking, and inspiration sampling.
 
-- [ ] `ProgramDatabaseBackend` protocol
-- [ ] `JsonFileBackend` implementation (default)
+### Phase 13A (Minimal Working DB) ✅
+- [x] `StrategyStatus` enum
+- [x] `StrategyRecord` dataclass
+- [x] `ProgramDatabaseBackend` protocol
+- [x] `JsonFileBackend` implementation (default)
+- [x] `ProgramDatabase` class with backend abstraction
+- [x] Strategy registration and lineage tracking (with correct DB ID tracking)
+- [x] Basic query by tags/status
+- [x] Evolver integration with correct ID lineage
+- [x] Inspiration sampling (exploitation, exploration, trajectory, mixed)
+
+### Phase 13B-D (Future)
 - [ ] `SqliteBackend` implementation
-- [ ] `ProgramDatabase` class with backend abstraction
-- [ ] Strategy registration and lineage tracking
-- [ ] Inspiration sampling (exploitation, exploration, trajectory, mixed)
 - [ ] `generate_improvement_with_inspirations()` in LLMClient
 - [ ] Migration script from `StrategyPersister`
+- [ ] EvaluationContext and eval_context_id filtering
+- [ ] MAP-Elites style sampling
 
 ---
 

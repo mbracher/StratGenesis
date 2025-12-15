@@ -4,6 +4,8 @@ This module contains the ProfitEvolver class which orchestrates the
 evolution loop for trading strategy optimization using LLMs.
 """
 
+from __future__ import annotations
+
 import inspect
 import json
 import random
@@ -11,6 +13,7 @@ import shutil
 import traceback
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -26,6 +29,9 @@ from profit.strategies import (
     RandomStrategy,
     BuyAndHoldStrategy,
 )
+
+if TYPE_CHECKING:
+    from profit.program_db import ProgramDatabase
 
 
 class StrategyPersister:
@@ -297,6 +303,7 @@ class ProfitEvolver:
         exclusive_orders: bool = True,
         output_dir: str | None = "evolved_strategies",
         finalize_trades: bool = True,
+        program_db: Optional["ProgramDatabase"] = None,
     ):
         """Initialize the ProfitEvolver.
 
@@ -307,6 +314,7 @@ class ProfitEvolver:
             exclusive_orders: If True, no overlapping long/short positions.
             output_dir: Directory to save evolved strategies. Set to None to disable.
             finalize_trades: If True, auto-close open trades at backtest end.
+            program_db: Optional ProgramDatabase for AlphaEvolve-style storage.
         """
         self.llm = llm_client
         self.initial_capital = initial_capital
@@ -314,6 +322,9 @@ class ProfitEvolver:
         self.exclusive_orders = exclusive_orders
         self.finalize_trades = finalize_trades
         self.persister = StrategyPersister(output_dir) if output_dir else None
+        self.program_db = program_db
+        # Track DB IDs for strategies: class_name -> db_id mapping
+        self._strategy_db_ids: Dict[str, str] = {}
 
     def run_backtest(self, strategy_class, data: pd.DataFrame) -> tuple[dict, pd.Series]:
         """Run a backtest on given data with specified strategy class.
@@ -457,6 +468,30 @@ class ProfitEvolver:
         best_strategy_class = strategy_class
         best_strategy_code = seed_code
 
+        # Register seed strategy in program DB
+        if self.program_db:
+            from profit.program_db import StrategyStatus
+
+            seed_metrics = {
+                "ann_return": P0,
+                "sharpe": base_result.get("Sharpe Ratio"),
+                "trade_count": base_result.get("# Trades"),
+            }
+            seed_id = self.program_db.register_strategy(
+                code=seed_code,
+                class_name=strategy_class.__name__,
+                parent_ids=[],
+                mutation_text="Seed strategy",
+                metrics=seed_metrics,
+                tags=self._infer_tags(seed_code),
+                status=StrategyStatus.SEED,
+                generation=0,
+                fold=fold,
+            )
+            # CRITICAL: Track the DB ID for this class
+            self._strategy_db_ids[strategy_class.__name__] = seed_id
+            strategy_class._db_id = seed_id
+
         # Build exec namespace with necessary imports for generated code
         exec_globals = {
             "Strategy": Strategy,
@@ -527,7 +562,27 @@ class ProfitEvolver:
                     else:
                         print("Max repair attempts reached. Discarding this mutation.")
 
+            # Get parent's DB ID (not class name!)
+            parent_db_id = getattr(parent_class, "_db_id", None) or self._strategy_db_ids.get(
+                parent_class.__name__
+            )
+
             if not success:
+                # Register failed strategy in program DB
+                if self.program_db:
+                    from profit.program_db import StrategyStatus
+
+                    self.program_db.register_strategy(
+                        code=new_code,
+                        class_name=new_class_name,
+                        parent_ids=[parent_db_id] if parent_db_id else [],
+                        mutation_text=improvement,
+                        metrics={},
+                        tags=self._infer_tags(new_code),
+                        status=StrategyStatus.COMPILE_FAILED,
+                        generation=gen,
+                        fold=fold,
+                    )
                 continue  # Move to next generation
 
             # 14. Compute fitness of new strategy
@@ -536,6 +591,14 @@ class ProfitEvolver:
                 f"New strategy variant '{new_class_name}' achieved validation "
                 f"annual return {P_new:.2f}%"
             )
+
+            # Prepare metrics for registration
+            new_metrics = {
+                "ann_return": P_new,
+                "sharpe": res.get("Sharpe Ratio"),
+                "trade_count": res.get("# Trades"),
+                "expectancy": res.get("Expectancy [%]"),
+            }
 
             # 15-18. Check against MAS threshold
             if P_new is not None and P_new >= MAS:
@@ -546,7 +609,27 @@ class ProfitEvolver:
                     f"Population size now {len(population)}."
                 )
 
-                # Persist the accepted strategy
+                # Register accepted strategy in program DB
+                if self.program_db:
+                    from profit.program_db import StrategyStatus
+
+                    child_id = self.program_db.register_strategy(
+                        code=new_code,
+                        class_name=new_class_name,
+                        parent_ids=[parent_db_id] if parent_db_id else [],
+                        mutation_text=improvement,
+                        metrics=new_metrics,
+                        tags=self._infer_tags(new_code),
+                        status=StrategyStatus.ACCEPTED,
+                        generation=gen,
+                        fold=fold,
+                        improvement_delta=P_new - parent_perf,
+                    )
+                    # CRITICAL: Track DB ID for accepted strategies
+                    self._strategy_db_ids[new_class_name] = child_id
+                    NewStrategyClass._db_id = child_id
+
+                # Persist the accepted strategy (existing persister)
                 if self.persister and self.persister.run_dir:
                     metrics = {
                         "AnnReturn%": P_new,
@@ -570,6 +653,22 @@ class ProfitEvolver:
                     best_strategy_class = NewStrategyClass
                     best_strategy_code = new_code
             else:
+                # Register rejected strategy in program DB
+                if self.program_db:
+                    from profit.program_db import StrategyStatus
+
+                    self.program_db.register_strategy(
+                        code=new_code,
+                        class_name=new_class_name,
+                        parent_ids=[parent_db_id] if parent_db_id else [],
+                        mutation_text=improvement,
+                        metrics=new_metrics,
+                        tags=self._infer_tags(new_code),
+                        status=StrategyStatus.REJECTED,
+                        generation=gen,
+                        fold=fold,
+                        improvement_delta=P_new - parent_perf,
+                    )
                 print(f"Discarded new strategy (did not meet MAS={MAS:.2f}%).")
 
         print(
@@ -673,3 +772,28 @@ class ProfitEvolver:
             print(f"\nRun summary saved to: {summary_path}")
 
         return results
+
+    def _infer_tags(self, code: str) -> list[str]:
+        """Infer strategy tags from code content.
+
+        Args:
+            code: Strategy source code.
+
+        Returns:
+            List of inferred tags.
+        """
+        tags = []
+        code_lower = code.lower()
+
+        if "bollinger" in code_lower or "mean" in code_lower:
+            tags.append("mean-reversion")
+        if "ema" in code_lower or "sma" in code_lower or "crossover" in code_lower:
+            tags.append("trend")
+        if "rsi" in code_lower or "cci" in code_lower or "williams" in code_lower:
+            tags.append("oscillator")
+        if "macd" in code_lower:
+            tags.append("momentum")
+        if "atr" in code_lower or "stop" in code_lower:
+            tags.append("risk-management")
+
+        return tags if tags else ["unclassified"]
