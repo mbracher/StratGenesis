@@ -71,8 +71,11 @@ def print_results(results: list[dict]) -> None:
     print("=" * 60)
 
     for res in results:
+        strat = res["strategy"]
+        db_id = getattr(strat, "_db_id", None) or ""
+        id_str = f"[{db_id}] " if db_id else ""
         print(f"\nFold {res['fold']}:")
-        print(f"  Best Strategy: {res['strategy'].__name__}")
+        print(f"  Best Strategy: {id_str}{strat.__name__}")
         print(f"  Annualized Return: {res['ann_return']:.2f}%")
         print(f"  Sharpe Ratio: {res['sharpe']:.2f}")
         print(f"  Expectancy: {res['expectancy']:.2f}%")
@@ -104,7 +107,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="ProFiT: LLM-Driven Evolutionary Trading System"
     )
-    parser.add_argument("--data", required=True, help="Path to OHLCV CSV file")
+    parser.add_argument("--data", help="Path to OHLCV CSV file (required unless using --export-strategy)")
     parser.add_argument(
         "--strategy",
         default="EMACrossover",
@@ -157,8 +160,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--output-dir",
-        default="evolved_strategies",
-        help="Directory to save evolved strategies (use 'none' to disable)",
+        default=None,
+        help="[DEPRECATED] Directory for legacy file persistence. Use program_db instead.",
     )
     parser.add_argument(
         "--no-finalize-trades",
@@ -206,10 +209,68 @@ def main() -> int:
         default=5,
         help="In adaptive mode, use full rewrites for first N generations (default: 5)",
     )
+    # Export command (alternative to deprecated output_dir)
+    parser.add_argument(
+        "--export-strategy",
+        metavar="ID",
+        help="Export a strategy from program_db to a .py file by its ID (then exit)",
+    )
+    parser.add_argument(
+        "--export-dir",
+        default="exported_strategies",
+        help="Directory for exported strategies (default: exported_strategies)",
+    )
 
     args = parser.parse_args()
 
-    # Load data
+    # Handle export command (doesn't require data file)
+    if args.export_strategy:
+        from profit.program_db import JsonFileBackend, ProgramDatabase, SqliteBackend
+
+        # Initialize database backend
+        if args.db_backend == "sqlite":
+            backend = SqliteBackend(args.db_path + ".sqlite")
+        else:
+            backend = JsonFileBackend(args.db_path)
+
+        db = ProgramDatabase(backend)
+        record = db.get_strategy(args.export_strategy)
+
+        if not record:
+            print(f"Error: Strategy '{args.export_strategy}' not found in database")
+            return 1
+
+        # Create export directory
+        export_dir = Path(args.export_dir)
+        export_dir.mkdir(parents=True, exist_ok=True)
+        export_path = export_dir / f"{record.class_name}.py"
+
+        # Build header with metadata
+        header = f'''"""Exported Strategy: {record.class_name}
+
+DB ID: {record.id}
+Generation: {record.generation}
+Status: {record.status.value}
+Metrics: {record.metrics}
+Parent IDs: {record.parent_ids}
+Created: {record.created_at}
+"""
+
+import numpy as np
+import pandas as pd
+from backtesting import Strategy
+
+
+'''
+        export_path.write_text(header + record.code)
+        print(f"Exported [{record.id}] {record.class_name} to {export_path}")
+        return 0
+
+    # Load data (required for evolution)
+    if not args.data:
+        print("Error: --data is required for evolution. Use --export-strategy for export mode.")
+        return 1
+
     print(f"Loading data from {args.data}...")
     try:
         data = load_data(args.data)
@@ -252,8 +313,10 @@ def main() -> int:
         program_db = ProgramDatabase(backend)
         print(f"Program database: {args.db_backend} backend at {args.db_path}")
 
-    # Initialize evolver
-    output_dir = None if args.output_dir.lower() == "none" else args.output_dir
+    # Initialize evolver (output_dir is deprecated, use program_db instead)
+    output_dir = None
+    if args.output_dir is not None and args.output_dir.lower() != "none":
+        output_dir = args.output_dir
     evolver = ProfitEvolver(
         llm_client,
         initial_capital=args.capital,

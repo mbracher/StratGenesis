@@ -44,6 +44,34 @@ class TestProfitEvolverInit:
 
         assert evolver.llm is mock_llm
 
+    def test_output_dir_deprecation_warning(self):
+        """Should emit deprecation warning when output_dir is provided."""
+        import warnings
+
+        mock_llm = Mock()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            evolver = ProfitEvolver(mock_llm, output_dir="test_output")
+
+            # Check that a deprecation warning was raised
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "deprecated" in str(w[0].message).lower()
+            assert "program_db" in str(w[0].message).lower()
+
+    def test_no_deprecation_warning_without_output_dir(self):
+        """Should not emit warning when output_dir is None (default)."""
+        import warnings
+
+        mock_llm = Mock()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            evolver = ProfitEvolver(mock_llm)
+
+            # No deprecation warning should be raised
+            deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+            assert len(deprecation_warnings) == 0
+
 
 class TestRunBacktest:
     """Test backtest execution."""
@@ -442,9 +470,9 @@ class TestProfitEvolverPersistence:
         assert evolver.persister is None
 
     def test_default_output_dir(self):
-        """Should use default output directory."""
+        """Should have no persister by default (deprecated)."""
         mock_llm = Mock()
         evolver = ProfitEvolver(mock_llm)
 
-        assert evolver.persister is not None
-        assert evolver.persister.output_dir == Path("evolved_strategies")
+        # Default is now None (StrategyPersister is deprecated)
+        assert evolver.persister is None

@@ -11,6 +11,7 @@ import json
 import random
 import shutil
 import traceback
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Optional
@@ -303,7 +304,7 @@ class ProfitEvolver:
         initial_capital: float = 10000,
         commission: float = 0.002,
         exclusive_orders: bool = True,
-        output_dir: str | None = "evolved_strategies",
+        output_dir: str | None = None,
         finalize_trades: bool = True,
         program_db: Optional["ProgramDatabase"] = None,
         prefer_diffs: bool = True,
@@ -318,7 +319,7 @@ class ProfitEvolver:
             initial_capital: Starting cash for backtests (default: $10,000).
             commission: Per-trade commission rate (default: 0.002 = 0.2%).
             exclusive_orders: If True, no overlapping long/short positions.
-            output_dir: Directory to save evolved strategies. Set to None to disable.
+            output_dir: [DEPRECATED] Directory to save evolved strategies. Use program_db instead.
             finalize_trades: If True, auto-close open trades at backtest end.
             program_db: Optional ProgramDatabase for AlphaEvolve-style storage.
             prefer_diffs: If True, attempt diff-based mutations before full rewrites.
@@ -331,6 +332,16 @@ class ProfitEvolver:
         self.commission = commission
         self.exclusive_orders = exclusive_orders
         self.finalize_trades = finalize_trades
+
+        # Deprecation warning for output_dir
+        if output_dir is not None:
+            warnings.warn(
+                "output_dir (StrategyPersister) is deprecated. "
+                "Use program_db for strategy storage instead. "
+                "Use --export-strategy to export strategies from the database.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.persister = StrategyPersister(output_dir) if output_dir else None
         self.program_db = program_db
         # Track DB IDs for strategies: class_name -> db_id mapping
@@ -504,10 +515,13 @@ class ProfitEvolver:
                 status=StrategyStatus.SEED,
                 generation=0,
                 fold=fold,
+                val_return=P0,
+                repair_attempts=0,
             )
             # CRITICAL: Track the DB ID for this class
             self._strategy_db_ids[strategy_class.__name__] = seed_id
             strategy_class._db_id = seed_id
+            print(f"[{seed_id}] Registered seed: {strategy_class.__name__}")
 
         # Build exec namespace with necessary imports for generated code
         exec_globals = {
@@ -557,16 +571,22 @@ class ProfitEvolver:
                 new_code = self.llm.generate_strategy_code(parent_code, improvement)
 
             # Give the new strategy a unique name by generation
-            new_class_name = f"{parent_class.__name__}_Gen{gen}"
+            new_class_name = self._build_strategy_name(parent_class.__name__, gen)
 
             # Replace class name in code to avoid collisions
-            if new_code.startswith("class"):
-                new_code = new_code.replace(parent_class.__name__, new_class_name, 1)
+            if isinstance(new_code, str) and new_code.startswith("class"):
+                # Extract original class name from parent (base name for replacement)
+                original_class = parent_class.__name__.split("_")[0]
+                if original_class in new_code:
+                    new_code = new_code.replace(original_class, new_class_name, 1)
+                else:
+                    new_code = new_code.replace(parent_class.__name__, new_class_name, 1)
 
             # 8-11. Try to compile and backtest with repair loop
             success = False
             NewStrategyClass = None
             res = None
+            repair_count = 0  # Track number of repair attempts
 
             for attempt in range(1, 11):  # up to 10 repair attempts
                 try:
@@ -581,6 +601,7 @@ class ProfitEvolver:
                     break
 
                 except Exception as e:
+                    repair_count = attempt  # Track how many repairs needed
                     tb = traceback.format_exc()
                     print(f"Attempt {attempt}: Strategy code failed with error: {e}")
 
@@ -589,7 +610,7 @@ class ProfitEvolver:
                         new_code = self.llm.fix_code(new_code, tb)
 
                         # Ensure the class name persists in the corrected code
-                        if new_class_name not in new_code:
+                        if isinstance(new_code, str) and new_class_name not in new_code:
                             new_code = new_code.replace(
                                 parent_class.__name__, new_class_name, 1
                             )
@@ -606,7 +627,7 @@ class ProfitEvolver:
                 if self.program_db:
                     from profit.program_db import StrategyStatus
 
-                    self.program_db.register_strategy(
+                    failed_id = self.program_db.register_strategy(
                         code=new_code,
                         class_name=new_class_name,
                         parent_ids=[parent_db_id] if parent_db_id else [],
@@ -616,7 +637,12 @@ class ProfitEvolver:
                         status=StrategyStatus.COMPILE_FAILED,
                         generation=gen,
                         fold=fold,
+                        diff_from_parent=diff_text or "",
+                        val_return=None,
+                        repair_attempts=repair_count,
                     )
+                    self._strategy_db_ids[new_class_name] = failed_id
+                    print(f"[{failed_id}] Failed: {new_class_name} ({repair_count} repair attempts)")
                 continue  # Move to next generation
 
             # 14. Compute fitness of new strategy
@@ -658,10 +684,15 @@ class ProfitEvolver:
                         generation=gen,
                         fold=fold,
                         improvement_delta=P_new - parent_perf,
+                        diff_from_parent=diff_text or "",
+                        val_return=P_new,
+                        repair_attempts=repair_count,
                     )
                     # CRITICAL: Track DB ID for accepted strategies
                     self._strategy_db_ids[new_class_name] = child_id
                     NewStrategyClass._db_id = child_id
+                    repairs_str = f", {repair_count} repairs" if repair_count > 0 else ""
+                    print(f"[{child_id}] Accepted: {new_class_name} (return={P_new:.2f}%{repairs_str})")
 
                 # Persist the accepted strategy (existing persister)
                 if self.persister and self.persister.run_dir:
@@ -691,7 +722,7 @@ class ProfitEvolver:
                 if self.program_db:
                     from profit.program_db import StrategyStatus
 
-                    self.program_db.register_strategy(
+                    rejected_id = self.program_db.register_strategy(
                         code=new_code,
                         class_name=new_class_name,
                         parent_ids=[parent_db_id] if parent_db_id else [],
@@ -702,8 +733,15 @@ class ProfitEvolver:
                         generation=gen,
                         fold=fold,
                         improvement_delta=P_new - parent_perf,
+                        diff_from_parent=diff_text or "",
+                        val_return=P_new,
+                        repair_attempts=repair_count,
                     )
-                print(f"Discarded new strategy (did not meet MAS={MAS:.2f}%).")
+                    self._strategy_db_ids[new_class_name] = rejected_id
+                    repairs_str = f", {repair_count} repairs" if repair_count > 0 else ""
+                    print(f"[{rejected_id}] Rejected: {new_class_name} (return={P_new:.2f}%{repairs_str}, below MAS={MAS:.2f}%)")
+                else:
+                    print(f"Discarded new strategy (did not meet MAS={MAS:.2f}%).")
 
         print(
             f"\nEvolution complete. Best strategy '{best_strategy_class.__name__}' "
@@ -767,6 +805,12 @@ class ProfitEvolver:
                 f"Sharpe: {sharpe:.2f}, Expectancy: {expectancy:.2f}%"
             )
 
+            # Update test metrics in program DB for overfitting detection
+            if self.program_db:
+                best_db_id = getattr(best_strat, "_db_id", None)
+                if best_db_id:
+                    self.program_db.update_test_metrics(best_db_id, ann_return)
+
             # Save best strategy for this fold
             if self.persister:
                 self.persister.save_fold_best(i, best_strat, best_code, metrics)
@@ -805,7 +849,35 @@ class ProfitEvolver:
             summary_path = self.persister.finalize_run(results)
             print(f"\nRun summary saved to: {summary_path}")
 
+        # Print program DB summary
+        self._print_strategy_summary()
+
         return results
+
+    def _build_strategy_name(self, parent_name: str, generation: int) -> str:
+        """Build strategy name with generation chain.
+
+        Format: {BaseName}_{CurrentGen}_{ParentGen1}_{ParentGen2}...
+        Example: EMACrossover_15_7_13 (gen 15 evolved from gen 13 evolved from gen 7)
+
+        Args:
+            parent_name: Name of the parent strategy class.
+            generation: Current generation number.
+
+        Returns:
+            New strategy class name with generation chain.
+        """
+        # Extract base name (original strategy without generation suffixes)
+        parts = parent_name.split("_")
+        base = parts[0]  # e.g., "EMACrossover"
+
+        if len(parts) > 1:
+            # Parent has generation chain, prepend current gen
+            gen_chain = "_".join(parts[1:])  # e.g., "7" or "13_7"
+            return f"{base}_{generation}_{gen_chain}"
+        else:
+            # Parent is seed, just use current gen
+            return f"{base}_{generation}"
 
     def _infer_tags(self, code: str) -> list[str]:
         """Infer strategy tags from code content.
@@ -831,6 +903,67 @@ class ProfitEvolver:
             tags.append("risk-management")
 
         return tags if tags else ["unclassified"]
+
+    def _print_strategy_summary(self) -> None:
+        """Print a summary table of all strategies registered during this run."""
+        if not self.program_db or not self._strategy_db_ids:
+            return
+
+        print("\n" + "=" * 88)
+        print("STRATEGY DATABASE SUMMARY")
+        print("=" * 88)
+        print(
+            f"{'ID':<12} {'Class Name':<26} {'Gen':>4} {'Fix':>4} "
+            f"{'Status':<10} {'Val':>8} {'Test':>8}"
+        )
+        print("-" * 88)
+
+        # Count by status
+        accepted_count = 0
+        rejected_count = 0
+        failed_count = 0
+        seed_count = 0
+
+        # Get all strategies from this run (by tracking IDs we registered)
+        for class_name, db_id in sorted(
+            self._strategy_db_ids.items(), key=lambda x: x[0]
+        ):
+            record = self.program_db.get_strategy(db_id)
+            if record:
+                # Validation return (prefer val_return, fall back to metrics)
+                val_ret = record.val_return
+                if val_ret is None:
+                    val_ret = record.metrics.get("ann_return")
+                val_str = f"{val_ret:.1f}%" if val_ret is not None else "N/A"
+
+                # Test return (filled after fold completion)
+                test_str = f"{record.test_return:.1f}%" if record.test_return is not None else "-"
+
+                # Repair attempts
+                repairs_str = str(record.repair_attempts) if record.repair_attempts > 0 else "0"
+
+                status_str = record.status.value
+                print(
+                    f"[{db_id}] {record.class_name:<26} {record.generation:>4} "
+                    f"{repairs_str:>4} {status_str:<10} {val_str:>8} {test_str:>8}"
+                )
+                # Count by status
+                if record.status.value == "accepted":
+                    accepted_count += 1
+                elif record.status.value == "rejected":
+                    rejected_count += 1
+                elif record.status.value == "compile_failed":
+                    failed_count += 1
+                elif record.status.value == "seed":
+                    seed_count += 1
+
+        print("-" * 88)
+        total = len(self._strategy_db_ids)
+        print(
+            f"Total: {total} | Seeds: {seed_count} | Accepted: {accepted_count} | "
+            f"Rejected: {rejected_count} | Failed: {failed_count}"
+        )
+        print("=" * 88)
 
     def _should_use_diffs(self, generation: int) -> bool:
         """Determine whether to use diff-based mutations for this generation.

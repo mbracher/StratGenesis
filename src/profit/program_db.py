@@ -318,6 +318,13 @@ class StrategyRecord:
     # For inspiration sampling
     improvement_delta: float = 0.0  # Performance improvement over parent
 
+    # Validation vs Test metrics (Phase 15: for overfitting detection)
+    val_return: Optional[float] = None  # Validation annualized return
+    test_return: Optional[float] = None  # Test annualized return (filled after fold completes)
+
+    # Code repair tracking
+    repair_attempts: int = 0  # Number of code fixes needed (0-10)
+
 
 class ProgramDatabaseBackend(Protocol):
     """Abstract interface for strategy storage backends."""
@@ -1120,6 +1127,9 @@ class ProgramDatabase:
         asset: Optional[str] = None,
         eval_context: Optional[EvaluationContext] = None,
         improvement_delta: float = 0.0,
+        diff_from_parent: str = "",
+        val_return: Optional[float] = None,
+        repair_attempts: int = 0,
     ) -> str:
         """Register a strategy in the database (accepted or rejected).
 
@@ -1136,6 +1146,9 @@ class ProgramDatabase:
             asset: Asset/symbol this strategy was evolved on.
             eval_context: EvaluationContext for apples-to-apples comparison (Phase 13B).
             improvement_delta: Performance improvement over parent.
+            diff_from_parent: Git-style diff showing changes from parent strategy.
+            val_return: Validation set annualized return.
+            repair_attempts: Number of code repair attempts needed (0-10).
 
         Returns:
             The assigned strategy ID.
@@ -1165,6 +1178,9 @@ class ProgramDatabase:
             next_method_excerpt=next_excerpt,
             improvement_delta=improvement_delta,
             behavior_descriptor=behavior_descriptor,
+            diff_from_parent=diff_from_parent,
+            val_return=val_return,
+            repair_attempts=repair_attempts,
         )
         return self.backend.save(record)
 
@@ -1232,6 +1248,27 @@ class ProgramDatabase:
     def get_strategy(self, strategy_id: str) -> Optional[StrategyRecord]:
         """Retrieve a strategy by ID."""
         return self.backend.load(strategy_id)
+
+    def update_test_metrics(self, strategy_id: str, test_return: float) -> bool:
+        """Update test metrics for a strategy after fold completion.
+
+        This is called after the test phase to record how the strategy
+        performed on unseen data, enabling overfitting detection.
+
+        Args:
+            strategy_id: The strategy's database ID.
+            test_return: Test set annualized return.
+
+        Returns:
+            True if updated successfully, False if strategy not found.
+        """
+        record = self.backend.load(strategy_id)
+        if record is None:
+            return False
+
+        record.test_return = test_return
+        self.backend.save(record)
+        return True
 
     def query_by_tags(self, tags: List[str]) -> List[StrategyRecord]:
         """Find strategies with any of the given tags."""

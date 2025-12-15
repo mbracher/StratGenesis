@@ -265,6 +265,31 @@ class TestProgramDatabase:
         assert record.class_name == "TestStrategy"
         assert record.metrics["ann_return"] == 15.0
 
+    def test_register_strategy_with_diff(self, db):
+        """Should store diff_from_parent when provided."""
+        diff_text = """SEARCH:
+if fast > slow:
+    self.buy()
+REPLACE:
+if fast > slow and adx > 20:
+    self.buy()"""
+
+        strategy_id = db.register_strategy(
+            code="class Test: pass",
+            class_name="TestWithDiff",
+            parent_ids=["parent123"],
+            mutation_text="Added ADX filter",
+            metrics={"ann_return": 20.0},
+            tags=["trend"],
+            diff_from_parent=diff_text,
+        )
+
+        record = db.get_strategy(strategy_id)
+        assert record is not None
+        assert record.diff_from_parent == diff_text
+        assert "SEARCH:" in record.diff_from_parent
+        assert "adx > 20" in record.diff_from_parent
+
     def test_registers_all_statuses(self, db):
         """Should register strategies with all statuses."""
         db.register_strategy(
