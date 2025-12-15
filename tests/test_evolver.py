@@ -237,6 +237,53 @@ class TestMetricsExtraction:
         assert isinstance(metrics["Trades"], (int, float))
 
 
+class TestExtractStandardMetrics:
+    """Test _extract_standard_metrics helper method."""
+
+    def test_extracts_all_standard_metrics(self, medium_data):
+        """Should extract all standard metrics from backtest result."""
+        mock_llm = Mock()
+        evolver = ProfitEvolver(mock_llm)
+
+        _, result = evolver.run_backtest(EMACrossover, medium_data)
+        metrics = evolver._extract_standard_metrics(result)
+
+        # Check that key standard metrics are present
+        expected_keys = {
+            "ann_return", "total_return", "sharpe", "sortino", "calmar",
+            "max_drawdown", "volatility", "trade_count", "exposure_time",
+        }
+        # These should always be present (even with few trades)
+        for key in expected_keys:
+            assert key in metrics, f"Missing metric: {key}"
+
+    def test_filters_nan_values(self, medium_data):
+        """Should filter out NaN values from metrics."""
+        mock_llm = Mock()
+        evolver = ProfitEvolver(mock_llm)
+
+        _, result = evolver.run_backtest(EMACrossover, medium_data)
+        metrics = evolver._extract_standard_metrics(result)
+
+        # No values should be NaN
+        import math
+        for key, value in metrics.items():
+            assert not (isinstance(value, float) and math.isnan(value)), \
+                f"Metric {key} is NaN"
+
+    def test_converts_duration_to_days(self, medium_data):
+        """Should convert avg_holding_period from timedelta to days."""
+        mock_llm = Mock()
+        evolver = ProfitEvolver(mock_llm)
+
+        _, result = evolver.run_backtest(EMACrossover, medium_data)
+        metrics = evolver._extract_standard_metrics(result)
+
+        # If avg_holding_period is present, it should be numeric (days)
+        if "avg_holding_period" in metrics:
+            assert isinstance(metrics["avg_holding_period"], (int, float))
+
+
 class TestStrategyPersister:
     """Test StrategyPersister class."""
 

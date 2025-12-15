@@ -500,11 +500,7 @@ class ProfitEvolver:
         if self.program_db:
             from profit.program_db import StrategyStatus
 
-            seed_metrics = {
-                "ann_return": P0,
-                "sharpe": base_result.get("Sharpe Ratio"),
-                "trade_count": base_result.get("# Trades"),
-            }
+            seed_metrics = self._extract_standard_metrics(base_result)
             seed_id = self.program_db.register_strategy(
                 code=seed_code,
                 class_name=strategy_class.__name__,
@@ -521,7 +517,8 @@ class ProfitEvolver:
             # CRITICAL: Track the DB ID for this class
             self._strategy_db_ids[strategy_class.__name__] = seed_id
             strategy_class._db_id = seed_id
-            print(f"[{seed_id}] Registered seed: {strategy_class.__name__}")
+            metrics_str = self._format_metrics_summary(seed_metrics)
+            print(f"[{seed_id}] Seed: {strategy_class.__name__} ({metrics_str})")
 
         # Build exec namespace with necessary imports for generated code
         exec_globals = {
@@ -652,13 +649,8 @@ class ProfitEvolver:
                 f"annual return {P_new:.2f}%"
             )
 
-            # Prepare metrics for registration
-            new_metrics = {
-                "ann_return": P_new,
-                "sharpe": res.get("Sharpe Ratio"),
-                "trade_count": res.get("# Trades"),
-                "expectancy": res.get("Expectancy [%]"),
-            }
+            # Prepare metrics for registration (extract all standard metrics)
+            new_metrics = self._extract_standard_metrics(res)
 
             # 15-18. Check against MAS threshold
             if P_new is not None and P_new >= MAS:
@@ -692,7 +684,8 @@ class ProfitEvolver:
                     self._strategy_db_ids[new_class_name] = child_id
                     NewStrategyClass._db_id = child_id
                     repairs_str = f", {repair_count} repairs" if repair_count > 0 else ""
-                    print(f"[{child_id}] Accepted: {new_class_name} (return={P_new:.2f}%{repairs_str})")
+                    metrics_str = self._format_metrics_summary(new_metrics)
+                    print(f"[{child_id}] Accepted: {new_class_name} ({metrics_str}{repairs_str})")
 
                 # Persist the accepted strategy (existing persister)
                 if self.persister and self.persister.run_dir:
@@ -739,7 +732,8 @@ class ProfitEvolver:
                     )
                     self._strategy_db_ids[new_class_name] = rejected_id
                     repairs_str = f", {repair_count} repairs" if repair_count > 0 else ""
-                    print(f"[{rejected_id}] Rejected: {new_class_name} (return={P_new:.2f}%{repairs_str}, below MAS={MAS:.2f}%)")
+                    metrics_str = self._format_metrics_summary(new_metrics)
+                    print(f"[{rejected_id}] Rejected: {new_class_name} ({metrics_str}{repairs_str}, below MAS={MAS:.2f}%)")
                 else:
                     print(f"Discarded new strategy (did not meet MAS={MAS:.2f}%).")
 
@@ -909,14 +903,15 @@ class ProfitEvolver:
         if not self.program_db or not self._strategy_db_ids:
             return
 
-        print("\n" + "=" * 88)
+        print("\n" + "=" * 120)
         print("STRATEGY DATABASE SUMMARY")
-        print("=" * 88)
+        print("=" * 120)
         print(
-            f"{'ID':<12} {'Class Name':<26} {'Gen':>4} {'Fix':>4} "
-            f"{'Status':<10} {'Val':>8} {'Test':>8}"
+            f"{'ID':<10} {'Class Name':<24} {'Gen':>3} {'Fix':>3} "
+            f"{'Status':<8} {'Return':>8} {'Sharpe':>7} {'MaxDD':>7} "
+            f"{'Trades':>6} {'Win%':>5} {'Test':>8}"
         )
-        print("-" * 88)
+        print("-" * 120)
 
         # Count by status
         accepted_count = 0
@@ -930,11 +925,29 @@ class ProfitEvolver:
         ):
             record = self.program_db.get_strategy(db_id)
             if record:
+                metrics = record.metrics
+
                 # Validation return (prefer val_return, fall back to metrics)
                 val_ret = record.val_return
                 if val_ret is None:
-                    val_ret = record.metrics.get("ann_return")
+                    val_ret = metrics.get("ann_return")
                 val_str = f"{val_ret:.1f}%" if val_ret is not None else "N/A"
+
+                # Sharpe ratio
+                sharpe = metrics.get("sharpe")
+                sharpe_str = f"{sharpe:.2f}" if sharpe is not None else "-"
+
+                # Max drawdown
+                max_dd = metrics.get("max_drawdown")
+                dd_str = f"{max_dd:.1f}%" if max_dd is not None else "-"
+
+                # Trade count
+                trades = metrics.get("trade_count")
+                trades_str = f"{int(trades)}" if trades is not None else "-"
+
+                # Win rate
+                win_rate = metrics.get("win_rate")
+                win_str = f"{win_rate:.0f}%" if win_rate is not None else "-"
 
                 # Test return (filled after fold completion)
                 test_str = f"{record.test_return:.1f}%" if record.test_return is not None else "-"
@@ -942,10 +955,13 @@ class ProfitEvolver:
                 # Repair attempts
                 repairs_str = str(record.repair_attempts) if record.repair_attempts > 0 else "0"
 
-                status_str = record.status.value
+                status_str = record.status.value[:8]  # Truncate status
+                class_display = record.class_name[:24]  # Truncate class name
+
                 print(
-                    f"[{db_id}] {record.class_name:<26} {record.generation:>4} "
-                    f"{repairs_str:>4} {status_str:<10} {val_str:>8} {test_str:>8}"
+                    f"[{db_id}] {class_display:<24} {record.generation:>3} "
+                    f"{repairs_str:>3} {status_str:<8} {val_str:>8} {sharpe_str:>7} "
+                    f"{dd_str:>7} {trades_str:>6} {win_str:>5} {test_str:>8}"
                 )
                 # Count by status
                 if record.status.value == "accepted":
@@ -957,13 +973,98 @@ class ProfitEvolver:
                 elif record.status.value == "seed":
                     seed_count += 1
 
-        print("-" * 88)
+        print("-" * 120)
         total = len(self._strategy_db_ids)
         print(
             f"Total: {total} | Seeds: {seed_count} | Accepted: {accepted_count} | "
             f"Rejected: {rejected_count} | Failed: {failed_count}"
         )
-        print("=" * 88)
+        print("=" * 120)
+
+    def _format_metrics_summary(self, metrics: Dict[str, float]) -> str:
+        """Format metrics dict into a readable summary string.
+
+        Args:
+            metrics: Dict of metric name to value.
+
+        Returns:
+            Formatted string like "return=15.2%, sharpe=1.2, dd=-8.5%, trades=42"
+        """
+        parts = []
+
+        # Return (always show)
+        if "ann_return" in metrics:
+            parts.append(f"return={metrics['ann_return']:.1f}%")
+
+        # Sharpe (key risk-adjusted metric)
+        if "sharpe" in metrics:
+            parts.append(f"sharpe={metrics['sharpe']:.2f}")
+
+        # Max drawdown (key risk metric)
+        if "max_drawdown" in metrics:
+            parts.append(f"dd={metrics['max_drawdown']:.1f}%")
+
+        # Trade count
+        if "trade_count" in metrics:
+            parts.append(f"trades={int(metrics['trade_count'])}")
+
+        # Win rate (if available)
+        if "win_rate" in metrics:
+            parts.append(f"win={metrics['win_rate']:.0f}%")
+
+        # Sortino (if available and different insight from sharpe)
+        if "sortino" in metrics:
+            parts.append(f"sortino={metrics['sortino']:.2f}")
+
+        return ", ".join(parts)
+
+    def _extract_standard_metrics(self, result) -> Dict[str, float]:
+        """Extract all standard metrics from backtest result.
+
+        Maps backtesting.py result keys to STANDARD_METRICS schema defined
+        in program_db.py for consistent metric storage.
+
+        Args:
+            result: Backtesting.py result Series.
+
+        Returns:
+            Dict mapping standard metric names to values.
+        """
+        # Handle duration conversion for avg_holding_period
+        avg_duration = result.get("Avg. Trade Duration")
+        if avg_duration is not None and hasattr(avg_duration, "total_seconds"):
+            # Convert timedelta to days
+            avg_holding_days = avg_duration.total_seconds() / 86400
+        else:
+            avg_holding_days = None
+
+        metrics = {
+            # Returns
+            "ann_return": result.get("Return (Ann.) [%]"),
+            "total_return": result.get("Return [%]"),
+            # Risk-adjusted
+            "sharpe": result.get("Sharpe Ratio"),
+            "sortino": result.get("Sortino Ratio"),
+            "calmar": result.get("Calmar Ratio"),
+            # Risk
+            "max_drawdown": result.get("Max. Drawdown [%]"),
+            "volatility": result.get("Volatility (Ann.) [%]"),
+            # Trading behavior
+            "trade_count": result.get("# Trades"),
+            "win_rate": result.get("Win Rate [%]"),
+            "avg_trade_return": result.get("Avg. Trade [%]"),
+            "avg_holding_period": avg_holding_days,
+            "exposure_time": result.get("Exposure Time [%]"),
+            # Profit metrics
+            "profit_factor": result.get("Profit Factor"),
+            "expectancy": result.get("Expectancy [%]"),
+        }
+
+        # Filter out None and NaN values
+        return {
+            k: v for k, v in metrics.items()
+            if v is not None and not (isinstance(v, float) and np.isnan(v))
+        }
 
     def _should_use_diffs(self, generation: int) -> bool:
         """Determine whether to use diff-based mutations for this generation.
