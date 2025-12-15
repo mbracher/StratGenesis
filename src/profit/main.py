@@ -7,6 +7,7 @@ Usage:
 
 import argparse
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -209,6 +210,121 @@ def main() -> int:
         default=5,
         help="In adaptive mode, use full rewrites for first N generations (default: 5)",
     )
+
+    # Phase 15: Selection Policy Arguments
+    parser.add_argument(
+        "--selection-policy",
+        choices=["weighted", "gated", "pareto"],
+        default=None,
+        help="Selection policy for strategy acceptance (default: MAS threshold)",
+    )
+    # Primary thresholds (for gated policy)
+    parser.add_argument(
+        "--min-return",
+        type=float,
+        default=0.0,
+        help="Minimum annualized return threshold (default: 0.0)",
+    )
+    parser.add_argument(
+        "--min-sharpe",
+        type=float,
+        default=0.0,
+        help="Minimum Sharpe ratio threshold (default: 0.0)",
+    )
+    parser.add_argument(
+        "--max-drawdown",
+        type=float,
+        default=-50.0,
+        help="Maximum drawdown threshold, negative (default: -50.0)",
+    )
+    parser.add_argument(
+        "--min-trades",
+        type=int,
+        default=1,
+        help="Minimum number of trades required (default: 1)",
+    )
+    # Robustness thresholds (for gated policy)
+    parser.add_argument(
+        "--min-consistency",
+        type=float,
+        default=0.0,
+        help="Minimum %% of folds with positive return (default: 0.0)",
+    )
+    parser.add_argument(
+        "--min-worst-fold",
+        type=float,
+        default=-100.0,
+        help="Minimum return for worst fold (default: -100.0)",
+    )
+    parser.add_argument(
+        "--max-stability",
+        type=float,
+        default=100.0,
+        help="Maximum cross-fold std dev (default: 100.0)",
+    )
+    # WeightedSum policy weights
+    parser.add_argument(
+        "--w-return",
+        type=float,
+        default=0.5,
+        help="Weight for return in weighted policy (default: 0.5)",
+    )
+    parser.add_argument(
+        "--w-sharpe",
+        type=float,
+        default=0.3,
+        help="Weight for Sharpe in weighted policy (default: 0.3)",
+    )
+    parser.add_argument(
+        "--w-drawdown",
+        type=float,
+        default=0.2,
+        help="Weight for drawdown in weighted policy (default: 0.2)",
+    )
+    # Pareto objectives
+    parser.add_argument(
+        "--pareto-objectives",
+        nargs="+",
+        default=["ann_return", "sharpe", "max_drawdown"],
+        help="Objectives for Pareto selection (default: ann_return sharpe max_drawdown)",
+    )
+    # Cascade configuration
+    parser.add_argument(
+        "--skip-cascade",
+        action="store_true",
+        help="Skip evaluation cascade (use direct backtest only)",
+    )
+    parser.add_argument(
+        "--quick-eval",
+        action="store_true",
+        help="Use quick evaluation (syntax + smoke test only)",
+    )
+    parser.add_argument(
+        "--smoke-months",
+        type=int,
+        default=3,
+        help="Months of data for smoke test (default: 3)",
+    )
+    parser.add_argument(
+        "--risk-free-rate",
+        type=float,
+        default=0.0,
+        help="Annual risk-free rate for Sharpe/Sortino (default: 0.0)",
+    )
+    # Promotion gate thresholds
+    parser.add_argument(
+        "--gate-min-trades",
+        type=int,
+        default=1,
+        help="Promotion gate: minimum trades (default: 1)",
+    )
+    parser.add_argument(
+        "--gate-max-drawdown",
+        type=float,
+        default=-80.0,
+        help="Promotion gate: max drawdown limit (default: -80.0)",
+    )
+
     # Export command (alternative to deprecated output_dir)
     parser.add_argument(
         "--export-strategy",
@@ -343,9 +459,67 @@ from backtesting import Strategy
     strategy_class = STRATEGIES[args.strategy]
     print(f"Using seed strategy: {strategy_class.__name__}")
 
+    # Phase 15: Build selection policy if specified
+    selection_policy = None
+    if args.selection_policy:
+        from profit.evaluation import create_selection_policy
+
+        selection_policy = create_selection_policy(
+            args.selection_policy,
+            # Gated policy parameters
+            min_return=args.min_return,
+            min_sharpe=args.min_sharpe,
+            max_drawdown=args.max_drawdown,
+            min_trades=args.min_trades,
+            min_consistency=args.min_consistency,
+            min_worst_fold=args.min_worst_fold,
+            max_stability=args.max_stability,
+            # Weighted policy parameters
+            w_return=args.w_return,
+            w_sharpe=args.w_sharpe,
+            w_drawdown=args.w_drawdown,
+            # Pareto parameters
+            objectives=args.pareto_objectives,
+        )
+        print(f"Selection policy: {args.selection_policy}")
+
+    # Phase 15: Build evaluation cascade if not skipped
+    cascade = None
+    if not args.skip_cascade and selection_policy is not None:
+        from profit.evaluation import (
+            MetricsCalculator,
+            PromotionGate,
+            create_cascade,
+        )
+
+        metrics_calc = MetricsCalculator(risk_free_rate=args.risk_free_rate)
+        promotion_gate = PromotionGate(
+            min_trades=args.gate_min_trades,
+            max_drawdown_limit=args.gate_max_drawdown,
+        )
+
+        cascade_mode = "quick" if args.quick_eval else "standard"
+        cascade = create_cascade(
+            mode=cascade_mode,
+            metrics_calculator=metrics_calc,
+            promotion_gate=promotion_gate,
+            smoke_months=args.smoke_months,
+            initial_capital=args.capital,
+            commission=args.commission,
+            verbose=True,
+        )
+        print(f"Evaluation cascade: {cascade_mode} mode")
+
     # Run walk-forward optimization
     print(f"\nStarting walk-forward optimization with {args.folds} folds...")
-    results = evolver.walk_forward_optimize(data, strategy_class, n_folds=args.folds)
+    results = evolver.walk_forward_optimize(
+        data,
+        strategy_class,
+        n_folds=args.folds,
+        selection_policy=selection_policy,
+        cascade=cascade,
+        use_inspirations=not args.no_inspirations,
+    )
 
     # Print results
     print_results(results)

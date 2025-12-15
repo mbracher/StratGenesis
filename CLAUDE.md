@@ -107,6 +107,16 @@ Detailed implementation specs are in the `specs/` directory:
   - `MatchMode` enum - STRICT or TOLERANT matching
   - `generate_diff()`, `fix_diff()`, `generate_strategy_code_with_fallback()` in LLMClient
 
+- **evaluation.py** - Multi-metric evaluation and cascade
+  - `StrategyMetrics` dataclass with 13+ metrics (primary, secondary, robustness)
+  - `MetricsCalculator` for computing metrics from backtest results
+  - `EvaluationCache` for caching stage results
+  - Evaluation stages: `SyntaxCheckStage`, `SmokeTestStage`, `SingleFoldStage`, `FullWalkForwardStage`
+  - `PromotionGate` for fast rejection of junk strategies
+  - `EvaluationCascade` for fail-fast staged evaluation
+  - Selection policies: `WeightedSumPolicy`, `GatedMASPolicy`, `ParetoPolicy`
+  - `create_selection_policy()`, `create_cascade()` factory functions
+
 - **main.py** - Entry point and CLI
 
 ### Key Dependencies

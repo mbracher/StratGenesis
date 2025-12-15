@@ -502,9 +502,11 @@ class TestProfitEvolverPersistence:
     """Test ProfitEvolver persistence integration."""
 
     def test_output_dir_creates_persister(self):
-        """Should create persister when output_dir is set."""
+        """Should create persister when output_dir is set (deprecated)."""
         mock_llm = Mock()
-        evolver = ProfitEvolver(mock_llm, output_dir="test_output")
+        # Expect deprecation warning since output_dir is deprecated
+        with pytest.warns(DeprecationWarning, match="output_dir.*deprecated"):
+            evolver = ProfitEvolver(mock_llm, output_dir="test_output")
 
         assert evolver.persister is not None
         assert evolver.persister.output_dir == Path("test_output")

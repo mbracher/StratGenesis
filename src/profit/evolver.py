@@ -14,7 +14,7 @@ import traceback
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -33,6 +33,12 @@ from profit.strategies import (
 
 if TYPE_CHECKING:
     from profit.program_db import ProgramDatabase
+    from profit.evaluation import (
+        EvaluationCascade,
+        SelectionPolicy,
+        StrategyMetrics,
+        CascadeResult,
+    )
 
 
 class StrategyPersister:
@@ -455,6 +461,9 @@ class ProfitEvolver:
         val_data: pd.DataFrame,
         max_iters: int = 15,
         fold: int = 1,
+        selection_policy: Optional["SelectionPolicy"] = None,
+        cascade: Optional["EvaluationCascade"] = None,
+        use_inspirations: bool = True,
     ):
         """Evolve a strategy using LLM-guided mutations.
 
@@ -462,12 +471,19 @@ class ProfitEvolver:
         threshold. New strategies must meet or exceed MAS to be accepted into the
         population.
 
+        Phase 15: Supports multi-metric evaluation with cascade and selection policies.
+
         Args:
             strategy_class: Seed strategy class to evolve.
             train_data: Training data (for context, not directly used in fitness).
             val_data: Validation data for fitness evaluation.
             max_iters: Maximum number of evolution generations (default: 15).
             fold: Walk-forward fold number for persistence (default: 1).
+            selection_policy: Optional SelectionPolicy for multi-metric acceptance.
+                If None, uses MAS threshold based on annualized return.
+            cascade: Optional EvaluationCascade for staged evaluation.
+                If None, uses direct backtest evaluation.
+            use_inspirations: If True and program_db available, use inspiration sampling.
 
         Returns:
             Tuple of (best_strategy_class, best_perf, best_code) where:
@@ -489,12 +505,29 @@ class ProfitEvolver:
         # Get source code of the seed strategy
         seed_code = inspect.getsource(strategy_class)
 
+        # Phase 15: Compute full StrategyMetrics if using selection policy
+        baseline_metrics: Optional["StrategyMetrics"] = None
+        population_metrics: List["StrategyMetrics"] = []
+
+        if selection_policy is not None:
+            from profit.evaluation import MetricsCalculator
+
+            metrics_calc = MetricsCalculator()
+            baseline_metrics = metrics_calc.compute_all(base_result)
+            population_metrics = [baseline_metrics]
+            print(
+                f"Baseline metrics: Return={baseline_metrics.ann_return:.2f}%, "
+                f"Sharpe={baseline_metrics.sharpe:.2f}, "
+                f"MaxDD={baseline_metrics.max_drawdown:.2f}%"
+            )
+
         # Archive of viable strategies (as tuples of class, performance, and source code)
         # We store source code to support dynamically generated strategies
         population = [(strategy_class, P0, seed_code)]
         best_perf = P0
         best_strategy_class = strategy_class
         best_strategy_code = seed_code
+        best_metrics = baseline_metrics  # Track best metrics for policy-based ranking
 
         # Register seed strategy in program DB
         if self.program_db:
@@ -652,14 +685,50 @@ class ProfitEvolver:
             # Prepare metrics for registration (extract all standard metrics)
             new_metrics = self._extract_standard_metrics(res)
 
-            # 15-18. Check against MAS threshold
-            if P_new is not None and P_new >= MAS:
+            # Phase 15: Compute full StrategyMetrics if using selection policy
+            new_strategy_metrics: Optional["StrategyMetrics"] = None
+            if selection_policy is not None:
+                from profit.evaluation import MetricsCalculator
+
+                metrics_calc = MetricsCalculator()
+                new_strategy_metrics = metrics_calc.compute_all(res)
+                print(
+                    f"  Metrics: Sharpe={new_strategy_metrics.sharpe:.2f}, "
+                    f"MaxDD={new_strategy_metrics.max_drawdown:.2f}%, "
+                    f"Trades={new_strategy_metrics.trade_count}"
+                )
+
+            # 15-18. Check against acceptance criteria
+            # Phase 15: Use selection policy if provided, otherwise MAS threshold
+            should_accept = False
+            if selection_policy is not None and baseline_metrics is not None:
+                should_accept = selection_policy.should_accept(
+                    new_strategy_metrics,
+                    baseline_metrics,
+                    population_metrics=population_metrics,
+                )
+            else:
+                should_accept = P_new is not None and P_new >= MAS
+
+            if should_accept:
                 # Accept new strategy into population (with source code)
                 population.append((NewStrategyClass, P_new, new_code))
-                print(
-                    f"Accepted new strategy (>= MAS={MAS:.2f}%). "
-                    f"Population size now {len(population)}."
-                )
+
+                # Phase 15: Track metrics for Pareto-based selection
+                if new_strategy_metrics is not None:
+                    population_metrics.append(new_strategy_metrics)
+
+                if selection_policy is not None:
+                    fitness = selection_policy.compute_fitness(new_strategy_metrics)
+                    print(
+                        f"Accepted new strategy (fitness={fitness:.4f}). "
+                        f"Population size now {len(population)}."
+                    )
+                else:
+                    print(
+                        f"Accepted new strategy (>= MAS={MAS:.2f}%). "
+                        f"Population size now {len(population)}."
+                    )
 
                 # Register accepted strategy in program DB
                 if self.program_db:
@@ -706,10 +775,25 @@ class ProfitEvolver:
                     )
 
                 # Update best if this is highest so far
-                if P_new > best_perf:
-                    best_perf = P_new
-                    best_strategy_class = NewStrategyClass
-                    best_strategy_code = new_code
+                # Phase 15: Use policy fitness for comparison if available
+                if selection_policy is not None and new_strategy_metrics is not None:
+                    new_fitness = selection_policy.compute_fitness(new_strategy_metrics)
+                    best_fitness = (
+                        selection_policy.compute_fitness(best_metrics)
+                        if best_metrics is not None
+                        else float("-inf")
+                    )
+                    if new_fitness > best_fitness:
+                        best_perf = P_new
+                        best_strategy_class = NewStrategyClass
+                        best_strategy_code = new_code
+                        best_metrics = new_strategy_metrics
+                        print(f"  NEW BEST! Fitness={new_fitness:.4f}")
+                else:
+                    if P_new > best_perf:
+                        best_perf = P_new
+                        best_strategy_class = NewStrategyClass
+                        best_strategy_code = new_code
             else:
                 # Register rejected strategy in program DB
                 if self.program_db:
@@ -733,9 +817,15 @@ class ProfitEvolver:
                     self._strategy_db_ids[new_class_name] = rejected_id
                     repairs_str = f", {repair_count} repairs" if repair_count > 0 else ""
                     metrics_str = self._format_metrics_summary(new_metrics)
-                    print(f"[{rejected_id}] Rejected: {new_class_name} ({metrics_str}{repairs_str}, below MAS={MAS:.2f}%)")
+                    if selection_policy is not None:
+                        print(f"[{rejected_id}] Rejected: {new_class_name} ({metrics_str}{repairs_str}, failed policy)")
+                    else:
+                        print(f"[{rejected_id}] Rejected: {new_class_name} ({metrics_str}{repairs_str}, below MAS={MAS:.2f}%)")
                 else:
-                    print(f"Discarded new strategy (did not meet MAS={MAS:.2f}%).")
+                    if selection_policy is not None:
+                        print(f"Discarded new strategy (failed selection policy).")
+                    else:
+                        print(f"Discarded new strategy (did not meet MAS={MAS:.2f}%).")
 
         print(
             f"\nEvolution complete. Best strategy '{best_strategy_class.__name__}' "
@@ -744,17 +834,28 @@ class ProfitEvolver:
         return best_strategy_class, best_perf, best_strategy_code
 
     def walk_forward_optimize(
-        self, full_data: pd.DataFrame, strategy_class, n_folds: int = 5
+        self,
+        full_data: pd.DataFrame,
+        strategy_class,
+        n_folds: int = 5,
+        selection_policy: Optional["SelectionPolicy"] = None,
+        cascade: Optional["EvaluationCascade"] = None,
+        use_inspirations: bool = True,
     ) -> list[dict]:
         """Perform walk-forward optimization across multiple folds.
 
         Evolves the strategy on each training/validation set, then evaluates
         on the test set. Compares performance against baseline strategies.
 
+        Phase 15: Supports multi-metric evaluation with cascade and selection policies.
+
         Args:
             full_data: Complete historical DataFrame with datetime index and OHLCV columns.
             strategy_class: Seed strategy class to evolve.
             n_folds: Number of walk-forward folds (default: 5).
+            selection_policy: Optional SelectionPolicy for multi-metric acceptance.
+            cascade: Optional EvaluationCascade for staged evaluation.
+            use_inspirations: If True and program_db available, use inspiration sampling.
 
         Returns:
             List of per-fold result dictionaries containing:
@@ -787,7 +888,15 @@ class ProfitEvolver:
             print(f"Test period: {test.index[0]} to {test.index[-1]}")
 
             # Evolve strategy on this fold's data
-            best_strat, _, best_code = self.evolve_strategy(strategy_class, train, val, fold=i)
+            best_strat, _, best_code = self.evolve_strategy(
+                strategy_class,
+                train,
+                val,
+                fold=i,
+                selection_policy=selection_policy,
+                cascade=cascade,
+                use_inspirations=use_inspirations,
+            )
 
             # Evaluate best strategy on test set
             metrics, res = self.run_backtest(best_strat, test)

@@ -11,6 +11,8 @@ ProFiT (Program Search for Financial Trading) is a framework for automated disco
 - **Baseline Comparison**: Automatic comparison against Random and Buy-and-Hold strategies
 - **Program Database**: AlphaEvolve-style strategy archive with lineage tracking and inspiration sampling
 - **Multi-Objective Selection**: Pareto-based and weighted sampling for diverse strategy exploration
+- **Evaluation Cascade**: Fast rejection with staged evaluation (syntax, smoke test, single-fold, full walk-forward)
+- **Selection Policies**: WeightedSum, GatedMAS, and Pareto policies for multi-metric acceptance
 - **Modular Design**: Easy to extend with new strategies and data sources
 
 ## Architecture
@@ -101,6 +103,11 @@ See [docs/data-sources.md](docs/data-sources.md) for full documentation.
 | `--diff-mode` | adaptive | When to use diffs: always, never, or adaptive |
 | `--diff-match` | tolerant | Diff matching: strict (literal) or tolerant |
 | `--exploration-gens` | 5 | In adaptive mode, use rewrites for first N gens |
+| `--selection-policy` | (none) | Selection policy: weighted, gated, or pareto |
+| `--min-return` | 0.0 | Minimum annualized return threshold |
+| `--min-sharpe` | 0.0 | Minimum Sharpe ratio threshold |
+| `--max-drawdown` | -50.0 | Maximum drawdown threshold (negative) |
+| `--min-trades` | 1 | Minimum number of trades required |
 
 ### Dual-Model Configuration
 
@@ -136,6 +143,28 @@ uv run python -m profit.main --data data/ES_daily.csv --no-diffs
 uv run python -m profit.main --data data/ES_daily.csv --exploration-gens 10
 ```
 
+### Multi-Metric Evaluation
+
+ProFiT supports multi-objective strategy selection with three policies:
+
+- **GatedMAS** (`--selection-policy gated`): Multi-gate acceptance requiring strategies to pass all thresholds (return, Sharpe, drawdown, trades) AND beat the baseline
+- **WeightedSum** (`--selection-policy weighted`): Weighted combination of metrics with baseline-relative normalization
+- **Pareto** (`--selection-policy pareto`): Accept non-dominated strategies for diverse Pareto frontier exploration
+
+```bash
+# Use gated policy with custom thresholds
+uv run python -m profit.main --data data/ES_daily.csv \
+    --selection-policy gated --min-sharpe 0.5 --max-drawdown -30
+
+# Use weighted policy with custom weights
+uv run python -m profit.main --data data/ES_daily.csv \
+    --selection-policy weighted --w-return 0.4 --w-sharpe 0.4 --w-drawdown 0.2
+
+# Use Pareto policy for diverse exploration
+uv run python -m profit.main --data data/ES_daily.csv \
+    --selection-policy pareto --pareto-objectives ann_return sharpe max_drawdown
+```
+
 ## Data Format
 
 CSV with datetime index and OHLCV columns:
@@ -167,6 +196,7 @@ profit/
 │   ├── evolver.py         # Evolutionary engine with adaptive diff support
 │   ├── program_db.py      # Program database for strategy storage
 │   ├── diff_utils.py      # Diff parsing, application, and validation
+│   ├── evaluation.py      # Multi-metric evaluation cascade and policies
 │   └── main.py            # CLI entry point
 ├── scripts/               # Data download and utility scripts
 ├── tests/                 # Test suite

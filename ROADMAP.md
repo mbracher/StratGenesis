@@ -24,7 +24,7 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | 12 | Dual-Model LLM Configuration | [`specs/phase-12-dual-model-llm.md`](specs/phase-12-dual-model-llm.md) | ✅ |
 | 13 | Program Database | [`specs/phase-13-program-database.md`](specs/phase-13-program-database.md) | ✅ |
 | 14 | Diff-Based Mutations | [`specs/phase-14-diff-based-mutations.md`](specs/phase-14-diff-based-mutations.md) | ✅ |
-| 15 | Multi-Metric Evaluation | [`specs/phase-15-multi-metric-evaluation.md`](specs/phase-15-multi-metric-evaluation.md) | |
+| 15 | Multi-Metric Evaluation | [`specs/phase-15-multi-metric-evaluation.md`](specs/phase-15-multi-metric-evaluation.md) | ✅ |
 | 16 | Research & Data Agents | [`specs/phase-16-research-data-agents.md`](specs/phase-16-research-data-agents.md) | |
 | 17 | Multi-Asset & Portfolio | [`specs/phase-17-multi-asset-portfolio.md`](specs/phase-17-multi-asset-portfolio.md) | |
 | 18 | Production Monitoring | [`specs/phase-18-production-monitoring.md`](specs/phase-18-production-monitoring.md) | |
@@ -286,12 +286,41 @@ Surgical code mutations using SEARCH/REPLACE diffs instead of full rewrites.
 
 Multi-objective evaluation with fast rejection cascade.
 
-- [ ] `StrategyMetrics` dataclass (10+ metrics)
-- [ ] `MetricsCalculator` class
-- [ ] Evaluation cascade stages (syntax, smoke, single-fold, full WF)
-- [ ] `EvaluationCascade` class
-- [ ] Selection policies (WeightedSum, GatedMAS, Pareto)
-- [ ] CLI arguments for policies and thresholds
+### Core Module (evaluation.py) ✅
+- [x] Core helpers: `load_strategy_class()`, `run_bt()`, `evaluate_on_data()`, `code_hash()`
+- [x] `EvaluationCache` class with LRU-style eviction
+- [x] `StrategyMetrics` dataclass (13+ metrics including robustness)
+- [x] `MetricsCalculator` class with metric capping
+- [x] `PromotionGate` dataclass for stage 3 rejection
+- [x] Evaluation stages:
+  - [x] `SyntaxCheckStage` - Parse and compile code
+  - [x] `SmokeTestStage` - Run on small data slice
+  - [x] `SingleFoldStage` - Single validation fold with gate
+  - [x] `FullWalkForwardStage` - Full 5-fold evaluation
+- [x] `EvaluationCascade` class with fail-fast behavior
+- [x] Selection policies:
+  - [x] `WeightedSumPolicy` - Baseline-relative normalization
+  - [x] `GatedMASPolicy` - Multi-gate with robustness checks
+  - [x] `ParetoPolicy` - Population-aware dominance
+- [x] Factory functions: `create_selection_policy()`, `create_cascade()`
+
+### Evolver Integration ✅
+- [x] Updated `evolve_strategy()` with policy/cascade support
+- [x] Population metrics tracking for Pareto selection
+- [x] Policy-based fitness ranking for best strategy
+
+### CLI Integration ✅
+- [x] `--selection-policy` (weighted/gated/pareto)
+- [x] Primary thresholds: `--min-return`, `--min-sharpe`, `--max-drawdown`, `--min-trades`
+- [x] Robustness thresholds: `--min-consistency`, `--min-worst-fold`, `--max-stability`
+- [x] WeightedSum weights: `--w-return`, `--w-sharpe`, `--w-drawdown`
+- [x] Pareto config: `--pareto-objectives`
+- [x] Cascade config: `--skip-cascade`, `--quick-eval`, `--smoke-months`, `--risk-free-rate`
+- [x] Promotion gate: `--gate-min-trades`, `--gate-max-drawdown`
+
+### Tests ✅
+- [x] 48 tests for evaluation module (all passing)
+- [x] Core helpers, cache, metrics, stages, cascade, policies tested
 
 ---
 
