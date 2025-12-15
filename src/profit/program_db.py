@@ -21,6 +21,11 @@ Phase 13C: Scale & Quality
 - SqliteBackend implementation with proper parent join table
 - Atomic writes for JSON backend (already implemented)
 - Append-only index with compaction (already implemented)
+
+Phase 13D: Advanced Sampling
+- MAP-Elites style sampling from behavior descriptor cells
+- Cross-island sampling across tags/assets for cross-pollination
+- Multi-objective selection support (Pareto front, weighted sum)
 """
 
 from __future__ import annotations
@@ -78,6 +83,159 @@ STANDARD_METRICS = {
     "profit_factor": "Gross profit / gross loss",
     "expectancy": "Expected value per trade",
 }
+
+
+# Phase 13D: Multi-objective selection support
+
+
+@dataclass
+class SelectionObjective:
+    """Defines an objective for multi-objective selection.
+
+    Attributes:
+        metric: Name of the metric to optimize.
+        weight: Weight for weighted sum selection (default: 1.0).
+        minimize: If True, lower values are better (default: False).
+        threshold: Optional minimum (or maximum if minimize) acceptable value.
+    """
+
+    metric: str
+    weight: float = 1.0
+    minimize: bool = False
+    threshold: Optional[float] = None
+
+
+# Default objectives for common selection policies
+# NOTE: max_drawdown is stored as negative (e.g., -0.05 = 5% drawdown).
+# Since higher values (closer to 0) are better, we use minimize=False.
+DEFAULT_OBJECTIVES = [
+    SelectionObjective(metric="ann_return", weight=1.0),
+    SelectionObjective(metric="sharpe", weight=0.5),
+    SelectionObjective(metric="max_drawdown", weight=0.3, minimize=False),
+]
+
+
+def compute_pareto_ranks(
+    records: List["StrategyRecord"], objectives: List[SelectionObjective]
+) -> Dict[str, int]:
+    """Compute Pareto ranks for a list of strategy records.
+
+    Pareto rank 0 = non-dominated (Pareto front)
+    Pareto rank 1 = dominated only by rank 0, etc.
+
+    Args:
+        records: List of StrategyRecord objects.
+        objectives: List of SelectionObjective defining the optimization goals.
+
+    Returns:
+        Dict mapping strategy ID to Pareto rank (0 = best).
+    """
+    if not records or not objectives:
+        return {}
+
+    n = len(records)
+    dominated_count = [0] * n  # How many solutions dominate this one
+    dominates = [[] for _ in range(n)]  # Which solutions this one dominates
+
+    def dominates_check(a_idx: int, b_idx: int) -> bool:
+        """Check if record a dominates record b."""
+        a_metrics = records[a_idx].metrics
+        b_metrics = records[b_idx].metrics
+
+        at_least_one_better = False
+        for obj in objectives:
+            a_val = a_metrics.get(obj.metric, float("-inf") if not obj.minimize else float("inf"))
+            b_val = b_metrics.get(obj.metric, float("-inf") if not obj.minimize else float("inf"))
+
+            if obj.minimize:
+                if a_val > b_val:  # a is worse
+                    return False
+                if a_val < b_val:
+                    at_least_one_better = True
+            else:
+                if a_val < b_val:  # a is worse
+                    return False
+                if a_val > b_val:
+                    at_least_one_better = True
+
+        return at_least_one_better
+
+    # Count domination relationships
+    for i in range(n):
+        for j in range(n):
+            if i != j and dominates_check(i, j):
+                dominates[i].append(j)
+                dominated_count[j] += 1
+
+    # Assign Pareto ranks using fronts
+    ranks = {}
+    current_front = [i for i in range(n) if dominated_count[i] == 0]
+    rank = 0
+
+    while current_front:
+        for idx in current_front:
+            ranks[records[idx].id] = rank
+
+        next_front = []
+        for idx in current_front:
+            for dominated_idx in dominates[idx]:
+                dominated_count[dominated_idx] -= 1
+                if dominated_count[dominated_idx] == 0:
+                    next_front.append(dominated_idx)
+
+        current_front = next_front
+        rank += 1
+
+    return ranks
+
+
+def compute_weighted_score(
+    record: "StrategyRecord", objectives: List[SelectionObjective]
+) -> float:
+    """Compute weighted sum score for a strategy.
+
+    Args:
+        record: StrategyRecord to score.
+        objectives: List of SelectionObjective with weights.
+
+    Returns:
+        Weighted sum score (higher is better).
+    """
+    score = 0.0
+    for obj in objectives:
+        val = record.metrics.get(obj.metric, 0.0)
+        if obj.minimize:
+            # For minimization objectives, negate the value
+            val = -val
+        score += obj.weight * val
+    return score
+
+
+def passes_thresholds(
+    record: "StrategyRecord", objectives: List[SelectionObjective]
+) -> bool:
+    """Check if a strategy passes all threshold requirements.
+
+    Args:
+        record: StrategyRecord to check.
+        objectives: List of SelectionObjective with optional thresholds.
+
+    Returns:
+        True if all thresholds are met, False otherwise.
+    """
+    for obj in objectives:
+        if obj.threshold is None:
+            continue
+        val = record.metrics.get(obj.metric)
+        if val is None:
+            return False
+        if obj.minimize:
+            if val > obj.threshold:  # Should be less than threshold
+                return False
+        else:
+            if val < obj.threshold:  # Should be greater than threshold
+                return False
+    return True
 
 
 @dataclass
@@ -1110,6 +1268,7 @@ class ProgramDatabase:
         exclude_ids: Optional[List[str]] = None,
         eval_context_id: Optional[str] = None,
         include_rejected: bool = False,
+        objectives: Optional[List[SelectionObjective]] = None,
     ) -> List[StrategyRecord]:
         """Sample strategies for LLM inspiration.
 
@@ -1117,7 +1276,11 @@ class ProgramDatabase:
         - "exploitation": Top performers by primary metric
         - "exploration": Random from diverse tags/behavior cells
         - "trajectory": Recently improved strategies
-        - "mixed": Weighted combination (default)
+        - "map_elites": Sample from different behavior descriptor cells (Phase 13D)
+        - "cross_island": Sample across different tags/assets (Phase 13D)
+        - "pareto": Sample from Pareto front (Phase 13D)
+        - "weighted": Sample by weighted multi-objective score (Phase 13D)
+        - "mixed": Weighted combination of multiple modes (default)
 
         Args:
             n: Number of strategies to sample.
@@ -1125,6 +1288,7 @@ class ProgramDatabase:
             exclude_ids: Strategy IDs to exclude (e.g., current parent's DB ID).
             eval_context_id: Only sample from same evaluation context (Phase 13B).
             include_rejected: Include rejected strategies (for negative examples).
+            objectives: Selection objectives for pareto/weighted modes (Phase 13D).
 
         Returns:
             List of StrategyRecord objects for inspiration.
@@ -1151,6 +1315,14 @@ class ProgramDatabase:
             return self._sample_diverse(n, candidates)
         elif mode == "trajectory":
             return self._sample_improving(n, candidates)
+        elif mode == "map_elites":
+            return self._sample_map_elites(n, candidates)
+        elif mode == "cross_island":
+            return self._sample_cross_island(n, candidates)
+        elif mode == "pareto":
+            return self._sample_pareto(n, candidates, objectives or DEFAULT_OBJECTIVES)
+        elif mode == "weighted":
+            return self._sample_weighted(n, candidates, objectives or DEFAULT_OBJECTIVES)
         else:  # mixed
             return self._sample_mixed(n, candidates)
 
@@ -1211,17 +1383,179 @@ class ProgramDatabase:
 
         return sorted_candidates[:n]
 
+    def _sample_map_elites(
+        self, n: int, candidates: List[StrategyRecord]
+    ) -> List[StrategyRecord]:
+        """Sample from different behavior descriptor cells (Phase 13D).
+
+        This provides MAP-Elites style diversity by sampling the best
+        strategy from different behavioral niches. Each cell is defined
+        by the combination of behavior descriptor bins.
+
+        Args:
+            n: Number of strategies to sample.
+            candidates: List of candidate strategies.
+
+        Returns:
+            List of elite strategies from different behavior cells.
+        """
+        # Group by behavior cell (combination of descriptor bins)
+        cells: Dict[tuple, StrategyRecord] = {}
+
+        for record in candidates:
+            bd = record.behavior_descriptor
+            cell_key = (
+                bd.get("trade_freq_bin", 0),
+                bd.get("risk_bin", 0),
+                bd.get("win_bin", 0),
+            )
+
+            # Keep elite (best performer) per cell
+            if cell_key not in cells:
+                cells[cell_key] = record
+            elif record.metrics.get(self._primary_metric, 0) > cells[
+                cell_key
+            ].metrics.get(self._primary_metric, 0):
+                cells[cell_key] = record
+
+        # Sample from different cells
+        elites = list(cells.values())
+        random.shuffle(elites)
+        return elites[:n]
+
+    def _sample_cross_island(
+        self, n: int, candidates: List[StrategyRecord]
+    ) -> List[StrategyRecord]:
+        """Sample across different 'islands' (tags/assets) for cross-pollination (Phase 13D).
+
+        This enables cross-pollination of ideas between strategies evolved
+        on different assets or with different characteristics.
+
+        Args:
+            n: Number of strategies to sample.
+            candidates: List of candidate strategies.
+
+        Returns:
+            List of strategies from different islands.
+        """
+        # Group by tag + asset combination
+        islands: Dict[str, List[StrategyRecord]] = {}
+
+        for record in candidates:
+            tag = record.tags[0] if record.tags else "untagged"
+            asset = record.asset or "default"
+            island_key = f"{tag}:{asset}"
+
+            if island_key not in islands:
+                islands[island_key] = []
+            islands[island_key].append(record)
+
+        # Sample one from each island (the best performer from each)
+        results = []
+        island_keys = list(islands.keys())
+        random.shuffle(island_keys)
+
+        for island_key in island_keys:
+            if len(results) >= n:
+                break
+            island_records = islands[island_key]
+            if island_records:
+                # Pick best from this island
+                best = max(
+                    island_records,
+                    key=lambda r: r.metrics.get(self._primary_metric, 0),
+                )
+                results.append(best)
+
+        return results[:n]
+
+    def _sample_pareto(
+        self,
+        n: int,
+        candidates: List[StrategyRecord],
+        objectives: List[SelectionObjective],
+    ) -> List[StrategyRecord]:
+        """Sample from Pareto front (Phase 13D).
+
+        Returns strategies that are non-dominated (Pareto optimal) or
+        near the Pareto front, providing diverse trade-offs between
+        multiple objectives.
+
+        Args:
+            n: Number of strategies to sample.
+            candidates: List of candidate strategies.
+            objectives: Selection objectives defining the optimization goals.
+
+        Returns:
+            List of Pareto-optimal or near-optimal strategies.
+        """
+        if not candidates:
+            return []
+
+        # Compute Pareto ranks
+        ranks = compute_pareto_ranks(candidates, objectives)
+
+        # Sort by Pareto rank (0 = front), then by primary metric
+        sorted_candidates = sorted(
+            candidates,
+            key=lambda r: (
+                ranks.get(r.id, float("inf")),
+                -r.metrics.get(self._primary_metric, 0),
+            ),
+        )
+
+        return sorted_candidates[:n]
+
+    def _sample_weighted(
+        self,
+        n: int,
+        candidates: List[StrategyRecord],
+        objectives: List[SelectionObjective],
+    ) -> List[StrategyRecord]:
+        """Sample by weighted multi-objective score (Phase 13D).
+
+        Computes a weighted sum of multiple metrics and samples the
+        top scorers.
+
+        Args:
+            n: Number of strategies to sample.
+            candidates: List of candidate strategies.
+            objectives: Selection objectives with weights.
+
+        Returns:
+            List of top-scoring strategies by weighted sum.
+        """
+        if not candidates:
+            return []
+
+        # Sort by weighted score
+        sorted_candidates = sorted(
+            candidates,
+            key=lambda r: compute_weighted_score(r, objectives),
+            reverse=True,
+        )
+
+        return sorted_candidates[:n]
+
     def _sample_mixed(
         self, n: int, candidates: List[StrategyRecord]
     ) -> List[StrategyRecord]:
-        """Mixed sampling: top performer + diverse + improving."""
-        results = []
-        used_ids = set()
+        """Mixed sampling: top performer + diverse + improving + map_elites (Phase 13D).
 
-        # Allocate slots
-        n_exploit = max(1, n // 3)
-        n_explore = max(1, n // 3)
-        n_trajectory = n - n_exploit - n_explore
+        Combines multiple sampling strategies for comprehensive coverage:
+        - Exploitation: Top performers by primary metric
+        - Exploration: Random from diverse tags
+        - Trajectory: Strategies that showed improvement
+        - MAP-Elites: Elites from different behavior cells
+        """
+        results = []
+        used_ids: set = set()
+
+        # Allocate slots (4 modes now)
+        n_exploit = max(1, n // 4)
+        n_explore = max(1, n // 4)
+        n_trajectory = max(1, n // 4)
+        n_map_elites = n - n_exploit - n_explore - n_trajectory
 
         # Sample from each mode
         exploit = self._sample_top_performers(n_exploit, candidates)
@@ -1240,6 +1574,13 @@ class ProgramDatabase:
         remaining = [c for c in candidates if c.id not in used_ids]
         trajectory = self._sample_improving(n_trajectory, remaining)
         for r in trajectory:
+            if r.id not in used_ids:
+                results.append(r)
+                used_ids.add(r.id)
+
+        remaining = [c for c in candidates if c.id not in used_ids]
+        map_elites = self._sample_map_elites(n_map_elites, remaining)
+        for r in map_elites:
             if r.id not in used_ids:
                 results.append(r)
                 used_ids.add(r.id)

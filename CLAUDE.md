@@ -93,7 +93,9 @@ Detailed implementation specs are in the `specs/` directory:
   - `EvaluationContext` for apples-to-apples comparison
   - `JsonFileBackend` for file-based storage (default)
   - `SqliteBackend` for larger databases with efficient queries
-  - `sample_inspirations()` - exploitation, exploration, trajectory, and mixed modes
+  - `sample_inspirations()` - exploitation, exploration, trajectory, map_elites, cross_island, pareto, weighted, and mixed modes
+  - `SelectionObjective` dataclass for multi-objective selection
+  - `compute_pareto_ranks()`, `compute_weighted_score()`, `passes_thresholds()` helper functions
   - `generate_improvement_with_inspirations()` in LLMClient for richer prompts
 
 - **main.py** - Entry point and CLI

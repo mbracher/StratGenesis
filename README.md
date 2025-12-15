@@ -8,6 +8,8 @@ ProFiT (Program Search for Financial Trading) is a framework for automated disco
 - **Walk-Forward Validation**: Robust out-of-sample testing across multiple time folds
 - **Technical Indicators**: 5 seed strategies using common technical indicators
 - **Baseline Comparison**: Automatic comparison against Random and Buy-and-Hold strategies
+- **Program Database**: AlphaEvolve-style strategy archive with lineage tracking and inspiration sampling
+- **Multi-Objective Selection**: Pareto-based and weighted sampling for diverse strategy exploration
 - **Modular Design**: Easy to extend with new strategies and data sources
 
 ## Architecture
@@ -91,6 +93,9 @@ See [docs/data-sources.md](docs/data-sources.md) for full documentation.
 | `--capital` | 10000 | Initial capital |
 | `--commission` | 0.002 | Commission rate (0.2%) |
 | `--output-dir` | evolved_strategies | Directory to save evolved strategies |
+| `--db-backend` | json | Program database backend (json/sqlite) |
+| `--db-path` | program_db | Path for program database |
+| `--no-inspirations` | False | Disable inspiration sampling from database |
 
 ### Dual-Model Configuration
 
@@ -132,6 +137,7 @@ profit/
 │   ├── strategies.py      # Seed and baseline strategies
 │   ├── llm_interface.py   # LLM client for mutations
 │   ├── evolver.py         # Evolutionary engine
+│   ├── program_db.py      # Program database for strategy storage
 │   └── main.py            # CLI entry point
 ├── scripts/               # Data download utilities
 ├── tests/                 # Test suite
