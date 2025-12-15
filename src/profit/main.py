@@ -182,6 +182,30 @@ def main() -> int:
         action="store_true",
         help="Disable inspiration sampling from program database",
     )
+    # Phase 14: Diff-based mutations
+    parser.add_argument(
+        "--no-diffs",
+        action="store_true",
+        help="Disable diff-based mutations (use full rewrites only)",
+    )
+    parser.add_argument(
+        "--diff-match",
+        choices=["strict", "tolerant"],
+        default="tolerant",
+        help="Diff matching mode: strict (literal) or tolerant (normalized, default)",
+    )
+    parser.add_argument(
+        "--diff-mode",
+        choices=["always", "never", "adaptive"],
+        default="adaptive",
+        help="When to use diffs: always, never, or adaptive (default)",
+    )
+    parser.add_argument(
+        "--exploration-gens",
+        type=int,
+        default=5,
+        help="In adaptive mode, use full rewrites for first N generations (default: 5)",
+    )
 
     args = parser.parse_args()
 
@@ -237,7 +261,20 @@ def main() -> int:
         output_dir=output_dir,
         finalize_trades=not args.no_finalize_trades,
         program_db=program_db,
+        # Phase 14: Diff-based mutations
+        prefer_diffs=not args.no_diffs,
+        diff_mode=args.diff_mode,
+        diff_match=args.diff_match,
+        exploration_gens=args.exploration_gens,
     )
+
+    # Log diff settings
+    if not args.no_diffs:
+        print(f"Diff mutations: mode={args.diff_mode}, match={args.diff_match}")
+        if args.diff_mode == "adaptive":
+            print(f"  Exploration generations: {args.exploration_gens}")
+    else:
+        print("Diff mutations: disabled (using full rewrites)")
 
     # Get strategy class
     strategy_class = STRATEGIES[args.strategy]

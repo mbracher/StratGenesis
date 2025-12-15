@@ -9,13 +9,18 @@ Supports using different providers/models for each role (dual-model configuratio
 
 Phase 13B additions:
 - generate_improvement_with_inspirations(): Uses inspiration strategies for richer prompts
+
+Phase 14 additions:
+- generate_diff(): Generates SEARCH/REPLACE diff blocks for targeted mutations
+- fix_diff(): Re-prompts LLM to fix failed diff operations
+- generate_strategy_code_with_fallback(): Tries diffs first, falls back to full rewrite
 """
 
 from __future__ import annotations
 
 import os
 import re
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from profit.program_db import StrategyRecord
@@ -384,3 +389,242 @@ IMPORTANT:
             return match.group(1).strip()
 
         return text
+
+    # =========================================================================
+    # Phase 14: Diff-based mutations
+    # =========================================================================
+
+    def generate_diff(
+        self,
+        strategy_code: str,
+        improvement_proposal: str,
+        available_blocks: List[str],
+    ) -> str:
+        """Generate SEARCH/REPLACE diff blocks for targeted mutations.
+
+        Instead of rewriting the entire strategy, outputs surgical diffs
+        targeting specific EVOLVE blocks.
+
+        Args:
+            strategy_code: Current strategy code with EVOLVE markers.
+            improvement_proposal: The improvement to implement.
+            available_blocks: Names of EVOLVE blocks that can be modified.
+
+        Returns:
+            LLM response containing diff blocks in the specified format.
+        """
+        blocks_list = ", ".join(available_blocks)
+
+        prompt = f"""You are a precise code editor. Your task is to implement a strategy improvement
+using surgical SEARCH/REPLACE diffs.
+
+CURRENT STRATEGY CODE:
+```python
+{strategy_code}
+```
+
+IMPROVEMENT TO IMPLEMENT:
+{improvement_proposal}
+
+AVAILABLE BLOCKS FOR MODIFICATION:
+{blocks_list}
+
+OUTPUT FORMAT:
+For each change, output a diff block in this exact format:
+
+<<<SEARCH block_name="BLOCK_NAME">>>
+exact code to find (copy from the strategy, be specific enough to be unique)
+<<<REPLACE>>>
+new code to replace it with
+<<<END>>>
+
+RULES:
+1. Only modify code within the EVOLVE blocks listed above
+2. The SEARCH section should contain enough context to be unique within the block
+3. Include multiple lines in SEARCH if needed for uniqueness
+4. Keep changes minimal - only change what's necessary for the improvement
+5. Preserve the overall structure and indentation style
+6. You can output multiple diff blocks for different blocks
+7. If no changes are needed to a block, don't include it
+8. Match tolerant - whitespace is flexible but content must be unique
+
+OUTPUT YOUR DIFFS:
+"""
+
+        return self._chat(
+            prompt,
+            provider=self.coder_provider,
+            model=self.coder_model,
+            expect_code=False,  # Don't strip fences, we parse diff format
+        )
+
+    def fix_diff(
+        self,
+        original_code: str,
+        failed_diff: str,
+        error_message: str,
+        block_content: str,
+        block_name: str,
+    ) -> str:
+        """Re-prompt LLM to fix a failed diff operation.
+
+        Called when diff parsing or application fails.
+
+        Args:
+            original_code: The full strategy code.
+            failed_diff: The diff that failed to apply.
+            error_message: Description of what went wrong.
+            block_content: The exact content of the target block.
+            block_name: Name of the target block.
+
+        Returns:
+            New diff response with corrected SEARCH/REPLACE.
+        """
+        prompt = f"""Your previous diff failed to apply. Here's what went wrong:
+
+ERROR: {error_message}
+
+The SEARCH pattern must exactly match code in the target block.
+
+TARGET BLOCK '{block_name}' CONTENT:
+```
+{block_content}
+```
+
+YOUR FAILED DIFF:
+{failed_diff}
+
+Please try again. Output a corrected diff that will match the exact code in the target block.
+Include enough context lines (2-3 lines before and after) to ensure uniqueness.
+
+CORRECTED DIFF:
+"""
+
+        return self._chat(
+            prompt,
+            provider=self.coder_provider,
+            model=self.coder_model,
+            expect_code=False,
+        )
+
+    def generate_strategy_code_with_fallback(
+        self,
+        base_code: str,
+        improvement_proposal: str,
+        max_diff_attempts: int = 3,
+        match_mode: str = "tolerant",
+    ) -> Tuple[str, bool, Optional[str]]:
+        """Generate modified strategy code, preferring diffs but falling back to full rewrite.
+
+        Implements the diff-first approach with retry loop before fallback.
+
+        Args:
+            base_code: Original strategy code.
+            improvement_proposal: The improvement to implement.
+            max_diff_attempts: Number of diff attempts before fallback.
+            match_mode: "strict" or "tolerant" for diff matching.
+
+        Returns:
+            Tuple of (modified_code, used_diff, raw_diff_text):
+            - modified_code: The new strategy code
+            - used_diff: True if diff was used, False if full rewrite
+            - raw_diff_text: The raw diff response (or None if full rewrite)
+        """
+        from profit.diff_utils import (
+            MatchMode,
+            apply_diff,
+            extract_evolve_blocks,
+            get_block_names,
+            has_evolve_blocks,
+            parse_diff_response,
+            validate_modified_code,
+        )
+
+        # Check if code has EVOLVE blocks
+        if not has_evolve_blocks(base_code):
+            # No EVOLVE blocks - fall back to full rewrite
+            new_code = self.generate_strategy_code(base_code, improvement_proposal)
+            return new_code, False, None
+
+        available_blocks = get_block_names(base_code)
+        evolve_blocks = extract_evolve_blocks(base_code)
+
+        # Convert match_mode string to enum
+        mode = MatchMode.STRICT if match_mode == "strict" else MatchMode.TOLERANT
+
+        last_diff_response = None
+        last_error = None
+
+        for attempt in range(1, max_diff_attempts + 1):
+            # Generate diff (or fix previous failed diff)
+            if attempt == 1:
+                diff_response = self.generate_diff(
+                    base_code, improvement_proposal, available_blocks
+                )
+            else:
+                # Find the block that failed and retry with fix_diff
+                if last_error and last_error.get("block_name"):
+                    block_name = last_error["block_name"]
+                    block_content = evolve_blocks.get(block_name, {})
+                    if hasattr(block_content, "content"):
+                        block_content = block_content.content
+                    else:
+                        block_content = str(block_content)
+
+                    diff_response = self.fix_diff(
+                        base_code,
+                        last_diff_response or "",
+                        last_error.get("message", "Diff failed"),
+                        block_content,
+                        block_name,
+                    )
+                else:
+                    # Generic retry
+                    diff_response = self.generate_diff(
+                        base_code, improvement_proposal, available_blocks
+                    )
+
+            last_diff_response = diff_response
+
+            # Parse diff blocks
+            diff_blocks = parse_diff_response(diff_response)
+
+            if not diff_blocks:
+                last_error = {"message": "No valid diff blocks found in response"}
+                continue
+
+            # Apply diffs
+            result = apply_diff(base_code, diff_blocks, mode)
+
+            if not result.success:
+                # Record error for retry
+                error_msg = result.errors[0] if result.errors else "Unknown error"
+                # Try to identify which block failed
+                failed_block = None
+                for block_name, count in result.match_counts.items():
+                    if count != 1:
+                        failed_block = block_name
+                        break
+
+                last_error = {
+                    "message": error_msg,
+                    "block_name": failed_block,
+                }
+                continue
+
+            # Validate the modified code
+            validation = validate_modified_code(base_code, result.modified_code)
+
+            if not validation.valid:
+                last_error = {
+                    "message": f"Validation failed: {validation.error}",
+                    "block_name": result.blocks_modified[0] if result.blocks_modified else None,
+                }
+                continue
+
+            # Success
+            return result.modified_code, True, diff_response
+
+        # All attempts failed - fall back to full rewrite
+        new_code = self.generate_strategy_code(base_code, improvement_proposal)
+        return new_code, False, None

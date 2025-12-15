@@ -23,7 +23,7 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | 11 | Strategy Persistence | [`specs/phase-11-strategy-persistence.md`](specs/phase-11-strategy-persistence.md) | ✅ |
 | 12 | Dual-Model LLM Configuration | [`specs/phase-12-dual-model-llm.md`](specs/phase-12-dual-model-llm.md) | ✅ |
 | 13 | Program Database | [`specs/phase-13-program-database.md`](specs/phase-13-program-database.md) | ✅ |
-| 14 | Diff-Based Mutations | [`specs/phase-14-diff-based-mutations.md`](specs/phase-14-diff-based-mutations.md) | |
+| 14 | Diff-Based Mutations | [`specs/phase-14-diff-based-mutations.md`](specs/phase-14-diff-based-mutations.md) | ✅ |
 | 15 | Multi-Metric Evaluation | [`specs/phase-15-multi-metric-evaluation.md`](specs/phase-15-multi-metric-evaluation.md) | |
 | 16 | Research & Data Agents | [`specs/phase-16-research-data-agents.md`](specs/phase-16-research-data-agents.md) | |
 | 17 | Multi-Asset & Portfolio | [`specs/phase-17-multi-asset-portfolio.md`](specs/phase-17-multi-asset-portfolio.md) | |
@@ -262,14 +262,19 @@ AlphaEvolve-style program database with backend abstraction for strategy storage
 
 Surgical code mutations using SEARCH/REPLACE diffs instead of full rewrites.
 
-- [ ] EVOLVE block markers in strategies
-- [ ] `extract_evolve_blocks()` parser
-- [ ] `parse_diff_response()` parser
-- [ ] `apply_diff()` function
-- [ ] `validate_modified_code()` function
-- [ ] `generate_diff()` method in LLMClient
-- [ ] Fallback to full rewrite on diff failure
-- [ ] Updated seed strategies with EVOLVE markers
+- [x] EVOLVE block markers in strategies (all 5 seed strategies)
+- [x] `extract_evolve_blocks()` with character offsets for precise splicing
+- [x] `parse_diff_response()` parser preserving raw text
+- [x] `apply_diff()` with single-replace and ambiguity detection
+- [x] `validate_modified_code()` with security checks (imports, dangerous patterns)
+- [x] `generate_diff()` method in LLMClient
+- [x] `fix_diff()` for retry loop before fallback
+- [x] `generate_strategy_code_with_fallback()` with 3 retry attempts
+- [x] Adaptive diff/rewrite selection (`--diff-mode adaptive`)
+- [x] Configurable exploration generations (`--exploration-gens`)
+- [x] Updated seed strategies with EVOLVE markers
+- [x] CLI arguments (`--no-diffs`, `--diff-match`, `--diff-mode`, `--exploration-gens`)
+- [x] `scripts/add_evolve_markers.py` AST-based utility
 
 ---
 

@@ -1,6 +1,7 @@
 """Trading strategies for ProFiT.
 
 This module contains seed strategies and baseline strategies.
+Each seed strategy includes EVOLVE-BLOCK markers for targeted LLM mutations.
 """
 
 from backtesting import Strategy
@@ -15,11 +16,14 @@ class BollingerMeanReversion(Strategy):
     sells/shorts when above upper band.
     """
 
+    # EVOLVE-BLOCK: indicator_params
     bb_period = 20
     bb_stddev = 2
+    # END-EVOLVE-BLOCK
 
     def init(self):
         close = self.data.Close
+        # EVOLVE-BLOCK: signal_generation
         self.ma = self.I(lambda x: pd.Series(x).rolling(self.bb_period).mean(), close)
         self.std = self.I(
             lambda x: pd.Series(x).rolling(self.bb_period).std(ddof=0), close
@@ -30,6 +34,7 @@ class BollingerMeanReversion(Strategy):
         self.lower_band = self.I(
             lambda ma, std: ma - self.bb_stddev * std, self.ma, self.std
         )
+        # END-EVOLVE-BLOCK
 
     def next(self):
         price = self.data.Close[-1]
@@ -37,17 +42,19 @@ class BollingerMeanReversion(Strategy):
         upper = self.upper_band[-1]
         lower = self.lower_band[-1]
 
-        # Entry logic
+        # EVOLVE-BLOCK: entry_logic
         if price < lower and not self.position:
             self.buy()
         elif price > upper and not self.position:
             self.sell()
+        # END-EVOLVE-BLOCK
 
-        # Exit logic - close when price reverts to mean
+        # EVOLVE-BLOCK: exit_logic
         if self.position.is_long and price >= ma:
             self.position.close()
         elif self.position.is_short and price <= ma:
             self.position.close()
+        # END-EVOLVE-BLOCK
 
 
 class CCIStrategy(Strategy):
@@ -57,13 +64,20 @@ class CCIStrategy(Strategy):
     sells/shorts when CCI indicates overbought (> +100).
     """
 
+    # EVOLVE-BLOCK: indicator_params
     cci_period = 20
+    cci_oversold = -100
+    cci_overbought = 100
+    cci_exit_low = -50
+    cci_exit_high = 50
+    # END-EVOLVE-BLOCK
 
     def init(self):
         high = self.data.High
         low = self.data.Low
         close = self.data.Close
 
+        # EVOLVE-BLOCK: signal_generation
         # Typical Price
         tp = (high + low + close) / 3
 
@@ -83,21 +97,26 @@ class CCIStrategy(Strategy):
             return (tp_arr - sma_arr) / (0.015 * mad_arr)
 
         self.cci = self.I(calc_cci, tp, self.sma_tp, self.mad)
+        # END-EVOLVE-BLOCK
 
     def next(self):
         cci = self.cci[-1]
         if np.isnan(cci):
             return
 
+        # EVOLVE-BLOCK: entry_logic
         if not self.position:
-            if cci < -100:
+            if cci < self.cci_oversold:
                 self.buy()
-            elif cci > 100:
+            elif cci > self.cci_overbought:
                 self.sell()
-        else:
-            # Exit on mean reversion to neutral range
-            if -50 < cci < 50:
+        # END-EVOLVE-BLOCK
+
+        # EVOLVE-BLOCK: exit_logic
+        if self.position:
+            if self.cci_exit_low < cci < self.cci_exit_high:
                 self.position.close()
+        # END-EVOLVE-BLOCK
 
 
 class EMACrossover(Strategy):
@@ -107,33 +126,39 @@ class EMACrossover(Strategy):
     and sells/shorts when fast crosses below slow.
     """
 
+    # EVOLVE-BLOCK: indicator_params
     fast_ema = 50
     slow_ema = 200
+    # END-EVOLVE-BLOCK
 
     def init(self):
         price = self.data.Close
+        # EVOLVE-BLOCK: signal_generation
         self.ema_fast = self.I(
             lambda x: pd.Series(x).ewm(span=self.fast_ema, adjust=False).mean(), price
         )
         self.ema_slow = self.I(
             lambda x: pd.Series(x).ewm(span=self.slow_ema, adjust=False).mean(), price
         )
+        # END-EVOLVE-BLOCK
 
     def next(self):
         fast = self.ema_fast[-1]
         slow = self.ema_slow[-1]
 
-        # Entry logic
+        # EVOLVE-BLOCK: entry_logic
         if fast > slow and not self.position:
             self.buy()
         elif fast < slow and not self.position:
             self.sell()
+        # END-EVOLVE-BLOCK
 
-        # Exit logic
+        # EVOLVE-BLOCK: exit_logic
         if self.position.is_long and fast < slow:
             self.position.close()
         elif self.position.is_short and fast > slow:
             self.position.close()
+        # END-EVOLVE-BLOCK
 
 
 class MACDStrategy(Strategy):
@@ -142,13 +167,16 @@ class MACDStrategy(Strategy):
     Uses MACD (fast EMA - slow EMA) and signal line for crossover signals.
     """
 
+    # EVOLVE-BLOCK: indicator_params
     fast = 12
     slow = 26
     signal = 9
+    # END-EVOLVE-BLOCK
 
     def init(self):
         price = self.data.Close
 
+        # EVOLVE-BLOCK: signal_generation
         # Calculate EMAs
         ema_fast = self.I(
             lambda x: pd.Series(x).ewm(span=self.fast, adjust=False).mean(), price
@@ -164,6 +192,7 @@ class MACDStrategy(Strategy):
         self.signal_line = self.I(
             lambda x: pd.Series(x).ewm(span=self.signal, adjust=False).mean(), self.macd
         )
+        # END-EVOLVE-BLOCK
 
     def next(self):
         if len(self.macd) < 2:
@@ -177,6 +206,7 @@ class MACDStrategy(Strategy):
         if np.isnan(macd_val) or np.isnan(signal_val):
             return
 
+        # EVOLVE-BLOCK: entry_logic
         if not self.position:
             # Bullish crossover
             if macd_val > signal_val and macd_prev <= signal_prev:
@@ -184,12 +214,14 @@ class MACDStrategy(Strategy):
             # Bearish crossover
             elif macd_val < signal_val and macd_prev >= signal_prev:
                 self.sell()
-        else:
-            # Exit on opposite crossover
-            if self.position.is_long and macd_val < signal_val:
-                self.position.close()
-            elif self.position.is_short and macd_val > signal_val:
-                self.position.close()
+        # END-EVOLVE-BLOCK
+
+        # EVOLVE-BLOCK: exit_logic
+        if self.position.is_long and macd_val < signal_val:
+            self.position.close()
+        elif self.position.is_short and macd_val > signal_val:
+            self.position.close()
+        # END-EVOLVE-BLOCK
 
 
 class WilliamsRStrategy(Strategy):
@@ -198,13 +230,20 @@ class WilliamsRStrategy(Strategy):
     Buys when %R < -80 (oversold), sells/shorts when %R > -20 (overbought).
     """
 
+    # EVOLVE-BLOCK: indicator_params
     lookback = 14
+    oversold_threshold = -80
+    overbought_threshold = -20
+    exit_low = -60
+    exit_high = -40
+    # END-EVOLVE-BLOCK
 
     def init(self):
         high = self.data.High
         low = self.data.Low
         close = self.data.Close
 
+        # EVOLVE-BLOCK: signal_generation
         self.highest_high = self.I(
             lambda x: pd.Series(x).rolling(self.lookback).max(), high
         )
@@ -216,24 +255,29 @@ class WilliamsRStrategy(Strategy):
             return -100 * (hh_arr - close_arr) / (hh_arr - ll_arr)
 
         self.percentR = self.I(calc_percent_r, close, self.highest_high, self.lowest_low)
+        # END-EVOLVE-BLOCK
 
     def next(self):
         perc = self.percentR[-1]
         if np.isnan(perc):
             return
 
+        # EVOLVE-BLOCK: entry_logic
         if not self.position:
-            if perc < -80:
+            if perc < self.oversold_threshold:
                 self.buy()
-            elif perc > -20:
+            elif perc > self.overbought_threshold:
                 self.sell()
-        else:
-            # Exit when %R returns to mid-range
-            if -60 < perc < -40:
+        # END-EVOLVE-BLOCK
+
+        # EVOLVE-BLOCK: exit_logic
+        if self.position:
+            if self.exit_low < perc < self.exit_high:
                 self.position.close()
+        # END-EVOLVE-BLOCK
 
 
-# Baseline strategies
+# Baseline strategies (no EVOLVE markers - these are reference benchmarks)
 
 
 class RandomStrategy(Strategy):

@@ -293,6 +293,8 @@ class ProfitEvolver:
 
     Uses LLM-guided code mutation and walk-forward validation to evolve
     strategies that adapt to changing market conditions.
+
+    Phase 14: Supports diff-based mutations for surgical code changes.
     """
 
     def __init__(
@@ -304,6 +306,10 @@ class ProfitEvolver:
         output_dir: str | None = "evolved_strategies",
         finalize_trades: bool = True,
         program_db: Optional["ProgramDatabase"] = None,
+        prefer_diffs: bool = True,
+        diff_mode: str = "adaptive",
+        diff_match: str = "tolerant",
+        exploration_gens: int = 5,
     ):
         """Initialize the ProfitEvolver.
 
@@ -315,6 +321,10 @@ class ProfitEvolver:
             output_dir: Directory to save evolved strategies. Set to None to disable.
             finalize_trades: If True, auto-close open trades at backtest end.
             program_db: Optional ProgramDatabase for AlphaEvolve-style storage.
+            prefer_diffs: If True, attempt diff-based mutations before full rewrites.
+            diff_mode: "always", "never", or "adaptive" (use exploration_gens).
+            diff_match: "strict" or "tolerant" for diff matching.
+            exploration_gens: In adaptive mode, use full rewrites for first N generations.
         """
         self.llm = llm_client
         self.initial_capital = initial_capital
@@ -325,6 +335,13 @@ class ProfitEvolver:
         self.program_db = program_db
         # Track DB IDs for strategies: class_name -> db_id mapping
         self._strategy_db_ids: Dict[str, str] = {}
+
+        # Phase 14: Diff-based mutation settings
+        self.prefer_diffs = prefer_diffs
+        self.diff_mode = diff_mode
+        self.diff_match = diff_match
+        self.exploration_gens = exploration_gens
+        self._consecutive_diff_failures = 0
 
     def run_backtest(self, strategy_class, data: pd.DataFrame) -> tuple[dict, pd.Series]:
         """Run a backtest on given data with specified strategy class.
@@ -520,7 +537,24 @@ class ProfitEvolver:
             print(f"LLM suggested improvement: {improvement}")
 
             # 7. Prompt LLM B to synthesize modified strategy code
-            new_code = self.llm.generate_strategy_code(parent_code, improvement)
+            # Phase 14: Use diff-based approach if enabled
+            use_diffs_this_gen = self._should_use_diffs(gen)
+            diff_text = None
+            mutation_mode = "rewrite"
+
+            if use_diffs_this_gen:
+                new_code, used_diff, diff_text = self.llm.generate_strategy_code_with_fallback(
+                    parent_code, improvement, match_mode=self.diff_match
+                )
+                mutation_mode = "diff" if used_diff else "rewrite"
+                if used_diff:
+                    print(f"Applied diff-based mutation")
+                    self._consecutive_diff_failures = 0
+                else:
+                    print(f"Fell back to full code rewrite")
+                    self._consecutive_diff_failures += 1
+            else:
+                new_code = self.llm.generate_strategy_code(parent_code, improvement)
 
             # Give the new strategy a unique name by generation
             new_class_name = f"{parent_class.__name__}_Gen{gen}"
@@ -797,3 +831,37 @@ class ProfitEvolver:
             tags.append("risk-management")
 
         return tags if tags else ["unclassified"]
+
+    def _should_use_diffs(self, generation: int) -> bool:
+        """Determine whether to use diff-based mutations for this generation.
+
+        Phase 14: Implements adaptive diff/rewrite selection based on:
+        - diff_mode setting ("always", "never", "adaptive")
+        - exploration_gens threshold
+        - consecutive diff failure tracking
+
+        Args:
+            generation: Current evolution generation (1-indexed).
+
+        Returns:
+            True if diffs should be attempted, False for full rewrite.
+        """
+        if not self.prefer_diffs:
+            return False
+
+        if self.diff_mode == "never":
+            return False
+
+        if self.diff_mode == "always":
+            return True
+
+        # Adaptive mode
+        # Early generations: explore with full rewrites
+        if generation <= self.exploration_gens:
+            return False
+
+        # If diffs are failing repeatedly, switch to rewrites
+        if self._consecutive_diff_failures >= 2:
+            return False
+
+        return True

@@ -98,6 +98,15 @@ Detailed implementation specs are in the `specs/` directory:
   - `compute_pareto_ranks()`, `compute_weighted_score()`, `passes_thresholds()` helper functions
   - `generate_improvement_with_inspirations()` in LLMClient for richer prompts
 
+- **diff_utils.py** - Diff-based code mutation utilities
+  - `DiffBlock`, `EvolveBlock`, `ValidationResult` dataclasses
+  - `extract_evolve_blocks()` - Parse EVOLVE-BLOCK markers with character offsets
+  - `parse_diff_response()` - Parse LLM SEARCH/REPLACE diff format
+  - `apply_diff()` - Apply diffs with single-replace and ambiguity detection
+  - `validate_modified_code()` - Security validation (imports, dangerous patterns)
+  - `MatchMode` enum - STRICT or TOLERANT matching
+  - `generate_diff()`, `fix_diff()`, `generate_strategy_code_with_fallback()` in LLMClient
+
 - **main.py** - Entry point and CLI
 
 ### Key Dependencies

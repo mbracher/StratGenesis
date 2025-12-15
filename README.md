@@ -5,6 +5,7 @@ ProFiT (Program Search for Financial Trading) is a framework for automated disco
 ## Features
 
 - **LLM-Guided Evolution**: Uses GPT-4 or Claude to suggest and implement strategy improvements
+- **Diff-Based Mutations**: Surgical code changes via SEARCH/REPLACE diffs instead of full rewrites
 - **Walk-Forward Validation**: Robust out-of-sample testing across multiple time folds
 - **Technical Indicators**: 5 seed strategies using common technical indicators
 - **Baseline Comparison**: Automatic comparison against Random and Buy-and-Hold strategies
@@ -96,6 +97,10 @@ See [docs/data-sources.md](docs/data-sources.md) for full documentation.
 | `--db-backend` | json | Program database backend (json/sqlite) |
 | `--db-path` | program_db | Path for program database |
 | `--no-inspirations` | False | Disable inspiration sampling from database |
+| `--no-diffs` | False | Disable diff-based mutations (use full rewrites) |
+| `--diff-mode` | adaptive | When to use diffs: always, never, or adaptive |
+| `--diff-match` | tolerant | Diff matching: strict (literal) or tolerant |
+| `--exploration-gens` | 5 | In adaptive mode, use rewrites for first N gens |
 
 ### Dual-Model Configuration
 
@@ -106,6 +111,29 @@ Use different LLMs for analysis vs coding to optimize each role:
 uv run python -m profit.main --data data/ES_daily.csv --strategy EMACrossover \
     --analyst-provider openai --analyst-model gpt-4 \
     --coder-provider anthropic --coder-model claude-sonnet-4-20250514
+```
+
+### Diff-Based Mutations
+
+By default, ProFiT uses an adaptive approach to code mutations:
+- **Early generations (1-5)**: Full code rewrites to explore new structures
+- **Later generations (6+)**: Surgical diffs to fine-tune working strategies
+
+Strategies include EVOLVE-BLOCK markers that define safe mutation regions:
+- `indicator_params` - Tunable parameters (periods, thresholds)
+- `signal_generation` - Indicator calculations
+- `entry_logic` - Entry conditions
+- `exit_logic` - Exit conditions
+
+```bash
+# Always use diff-based mutations
+uv run python -m profit.main --data data/ES_daily.csv --diff-mode always
+
+# Disable diffs (full rewrites only)
+uv run python -m profit.main --data data/ES_daily.csv --no-diffs
+
+# Custom exploration period (10 generations before switching to diffs)
+uv run python -m profit.main --data data/ES_daily.csv --exploration-gens 10
 ```
 
 ## Data Format
@@ -134,12 +162,13 @@ Datetime,Open,High,Low,Close,Volume
 ```
 profit/
 ├── src/profit/
-│   ├── strategies.py      # Seed and baseline strategies
-│   ├── llm_interface.py   # LLM client for mutations
-│   ├── evolver.py         # Evolutionary engine
+│   ├── strategies.py      # Seed and baseline strategies (with EVOLVE markers)
+│   ├── llm_interface.py   # LLM client for mutations and diffs
+│   ├── evolver.py         # Evolutionary engine with adaptive diff support
 │   ├── program_db.py      # Program database for strategy storage
+│   ├── diff_utils.py      # Diff parsing, application, and validation
 │   └── main.py            # CLI entry point
-├── scripts/               # Data download utilities
+├── scripts/               # Data download and utility scripts
 ├── tests/                 # Test suite
 ├── docs/                  # Documentation
 ├── specs/                 # Implementation specifications
