@@ -165,6 +165,23 @@ def main() -> int:
         action="store_true",
         help="Don't auto-close open trades at backtest end (shows warnings)",
     )
+    # Program database arguments (Phase 13C)
+    parser.add_argument(
+        "--db-backend",
+        choices=["json", "sqlite"],
+        default="json",
+        help="Program database backend (default: json)",
+    )
+    parser.add_argument(
+        "--db-path",
+        default="program_db",
+        help="Path for program database (default: program_db)",
+    )
+    parser.add_argument(
+        "--no-inspirations",
+        action="store_true",
+        help="Disable inspiration sampling from program database",
+    )
 
     args = parser.parse_args()
 
@@ -193,6 +210,24 @@ def main() -> int:
     print(f"LLM Analyst: {llm_client.analyst_provider}/{llm_client.analyst_model}")
     print(f"LLM Coder: {llm_client.coder_provider}/{llm_client.coder_model}")
 
+    # Initialize program database (Phase 13C)
+    program_db = None
+    if not args.no_inspirations:
+        from profit.program_db import ProgramDatabase, JsonFileBackend, SqliteBackend
+
+        if args.db_backend == "sqlite":
+            db_path = (
+                args.db_path
+                if args.db_path.endswith(".sqlite")
+                else f"{args.db_path}.sqlite"
+            )
+            backend = SqliteBackend(db_path)
+        else:
+            backend = JsonFileBackend(args.db_path)
+
+        program_db = ProgramDatabase(backend)
+        print(f"Program database: {args.db_backend} backend at {args.db_path}")
+
     # Initialize evolver
     output_dir = None if args.output_dir.lower() == "none" else args.output_dir
     evolver = ProfitEvolver(
@@ -201,6 +236,7 @@ def main() -> int:
         commission=args.commission,
         output_dir=output_dir,
         finalize_trades=not args.no_finalize_trades,
+        program_db=program_db,
     )
 
     # Get strategy class

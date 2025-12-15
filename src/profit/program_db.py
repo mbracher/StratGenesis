@@ -16,6 +16,11 @@ Phase 13B: Make It Useful
 - eval_context_id filtering
 - STANDARD_METRICS schema for consistent metric naming
 - next_method_excerpt extraction for richer LLM prompts
+
+Phase 13C: Scale & Quality
+- SqliteBackend implementation with proper parent join table
+- Atomic writes for JSON backend (already implemented)
+- Append-only index with compaction (already implemented)
 """
 
 from __future__ import annotations
@@ -26,13 +31,15 @@ import os
 import random
 import re
 import shutil
+import sqlite3
 import tempfile
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Protocol
+from typing import TYPE_CHECKING, Dict, Generator, List, Optional, Protocol
 
 if TYPE_CHECKING:
     pass
@@ -445,6 +452,481 @@ class JsonFileBackend:
             reverse=True,
         )
         return [e["id"] for e in sorted_entries[:n]]
+
+
+class SqliteBackend:
+    """SQLite backend for larger databases with efficient queries (Phase 13C).
+
+    Uses a proper relational schema with:
+    - strategy_parents join table for parent-child relationships
+    - Separate tables for metrics, tags, and behavior descriptors
+    - Indexes for fast queries
+    """
+
+    def __init__(self, db_path: str = "program_db.sqlite"):
+        """Initialize the SQLite backend.
+
+        Args:
+            db_path: Path to the SQLite database file.
+        """
+        self.db_path = db_path
+        self._init_db()
+
+    @contextmanager
+    def _get_conn(self) -> Generator[sqlite3.Connection, None, None]:
+        """Context manager for database connections."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _init_db(self) -> None:
+        """Initialize database schema."""
+        with self._get_conn() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS strategies (
+                    id TEXT PRIMARY KEY,
+                    code TEXT NOT NULL,
+                    class_name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'accepted',
+                    mutation_text TEXT,
+                    generation INTEGER DEFAULT 0,
+                    fold INTEGER,
+                    asset TEXT,
+                    eval_context_id TEXT,
+                    improvement_delta REAL DEFAULT 0.0,
+                    next_method_excerpt TEXT,
+                    diff_from_parent TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                -- CRITICAL: Proper join table for parent relationships (not JSON!)
+                CREATE TABLE IF NOT EXISTS strategy_parents (
+                    strategy_id TEXT NOT NULL,
+                    parent_id TEXT NOT NULL,
+                    PRIMARY KEY (strategy_id, parent_id),
+                    FOREIGN KEY (strategy_id) REFERENCES strategies(id),
+                    FOREIGN KEY (parent_id) REFERENCES strategies(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy_id TEXT NOT NULL,
+                    metric_name TEXT NOT NULL,
+                    metric_value REAL NOT NULL,
+                    FOREIGN KEY (strategy_id) REFERENCES strategies(id),
+                    UNIQUE(strategy_id, metric_name)
+                );
+
+                CREATE TABLE IF NOT EXISTS tags (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy_id TEXT NOT NULL,
+                    tag TEXT NOT NULL,
+                    FOREIGN KEY (strategy_id) REFERENCES strategies(id),
+                    UNIQUE(strategy_id, tag)
+                );
+
+                CREATE TABLE IF NOT EXISTS behavior_descriptors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy_id TEXT NOT NULL,
+                    descriptor_name TEXT NOT NULL,
+                    descriptor_value REAL NOT NULL,
+                    FOREIGN KEY (strategy_id) REFERENCES strategies(id),
+                    UNIQUE(strategy_id, descriptor_name)
+                );
+
+                CREATE TABLE IF NOT EXISTS eval_contexts (
+                    context_id TEXT PRIMARY KEY,
+                    dataset_id TEXT,
+                    dataset_source TEXT,
+                    timeframe TEXT,
+                    train_start TEXT,
+                    train_end TEXT,
+                    val_start TEXT,
+                    val_end TEXT,
+                    test_start TEXT,
+                    test_end TEXT,
+                    initial_capital REAL,
+                    commission REAL,
+                    slippage REAL,
+                    backtest_engine TEXT
+                );
+
+                -- Indexes for fast queries
+                CREATE INDEX IF NOT EXISTS idx_strategies_generation
+                    ON strategies(generation);
+                CREATE INDEX IF NOT EXISTS idx_strategies_created_at
+                    ON strategies(created_at);
+                CREATE INDEX IF NOT EXISTS idx_strategies_status
+                    ON strategies(status);
+                CREATE INDEX IF NOT EXISTS idx_strategies_eval_context
+                    ON strategies(eval_context_id);
+                CREATE INDEX IF NOT EXISTS idx_metrics_strategy
+                    ON metrics(strategy_id);
+                CREATE INDEX IF NOT EXISTS idx_metrics_name_value
+                    ON metrics(metric_name, metric_value);
+                CREATE INDEX IF NOT EXISTS idx_tags_tag
+                    ON tags(tag);
+                CREATE INDEX IF NOT EXISTS idx_parents_parent
+                    ON strategy_parents(parent_id);
+                CREATE INDEX IF NOT EXISTS idx_behavior_strategy
+                    ON behavior_descriptors(strategy_id);
+            """
+            )
+
+    def save(self, record: StrategyRecord) -> str:
+        """Save strategy record to database."""
+        with self._get_conn() as conn:
+            # Insert main record
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO strategies
+                (id, code, class_name, status, mutation_text, generation,
+                 fold, asset, eval_context_id, improvement_delta,
+                 next_method_excerpt, diff_from_parent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    record.id,
+                    record.code,
+                    record.class_name,
+                    record.status.value
+                    if isinstance(record.status, StrategyStatus)
+                    else record.status,
+                    record.mutation_text,
+                    record.generation,
+                    record.fold,
+                    record.asset,
+                    record.eval_context_id,
+                    record.improvement_delta,
+                    record.next_method_excerpt,
+                    record.diff_from_parent,
+                    record.created_at.isoformat(),
+                ),
+            )
+
+            # Insert parent relationships (proper join table)
+            conn.execute(
+                "DELETE FROM strategy_parents WHERE strategy_id = ?", (record.id,)
+            )
+            for parent_id in record.parent_ids:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO strategy_parents (strategy_id, parent_id)
+                    VALUES (?, ?)
+                """,
+                    (record.id, parent_id),
+                )
+
+            # Insert metrics (delete old ones first for updates)
+            conn.execute("DELETE FROM metrics WHERE strategy_id = ?", (record.id,))
+            for name, value in record.metrics.items():
+                if value is not None:
+                    conn.execute(
+                        """
+                        INSERT INTO metrics (strategy_id, metric_name, metric_value)
+                        VALUES (?, ?, ?)
+                    """,
+                        (record.id, name, value),
+                    )
+
+            # Insert tags
+            conn.execute("DELETE FROM tags WHERE strategy_id = ?", (record.id,))
+            for tag in record.tags:
+                conn.execute(
+                    """
+                    INSERT INTO tags (strategy_id, tag)
+                    VALUES (?, ?)
+                """,
+                    (record.id, tag),
+                )
+
+            # Insert behavior descriptors
+            conn.execute(
+                "DELETE FROM behavior_descriptors WHERE strategy_id = ?", (record.id,)
+            )
+            for name, value in record.behavior_descriptor.items():
+                conn.execute(
+                    """
+                    INSERT INTO behavior_descriptors
+                    (strategy_id, descriptor_name, descriptor_value)
+                    VALUES (?, ?, ?)
+                """,
+                    (record.id, name, value),
+                )
+
+            # Insert eval context if present
+            if record.eval_context:
+                ctx = record.eval_context
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO eval_contexts
+                    (context_id, dataset_id, dataset_source, timeframe,
+                     train_start, train_end, val_start, val_end, test_start, test_end,
+                     initial_capital, commission, slippage, backtest_engine)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        record.eval_context_id,
+                        ctx.dataset_id,
+                        ctx.dataset_source,
+                        ctx.timeframe,
+                        ctx.train_start,
+                        ctx.train_end,
+                        ctx.val_start,
+                        ctx.val_end,
+                        ctx.test_start,
+                        ctx.test_end,
+                        ctx.initial_capital,
+                        ctx.commission,
+                        ctx.slippage,
+                        ctx.backtest_engine,
+                    ),
+                )
+
+        return record.id
+
+    def load(self, strategy_id: str) -> Optional[StrategyRecord]:
+        """Load strategy record from database."""
+        with self._get_conn() as conn:
+            # Get main record
+            row = conn.execute(
+                "SELECT * FROM strategies WHERE id = ?", (strategy_id,)
+            ).fetchone()
+
+            if not row:
+                return None
+
+            # Get parent IDs from join table
+            parent_ids = [
+                p_row["parent_id"]
+                for p_row in conn.execute(
+                    "SELECT parent_id FROM strategy_parents WHERE strategy_id = ?",
+                    (strategy_id,),
+                )
+            ]
+
+            # Get metrics
+            metrics = {}
+            for m_row in conn.execute(
+                "SELECT metric_name, metric_value FROM metrics WHERE strategy_id = ?",
+                (strategy_id,),
+            ):
+                metrics[m_row["metric_name"]] = m_row["metric_value"]
+
+            # Get tags
+            tags = [
+                t_row["tag"]
+                for t_row in conn.execute(
+                    "SELECT tag FROM tags WHERE strategy_id = ?", (strategy_id,)
+                )
+            ]
+
+            # Get behavior descriptors
+            behavior_descriptor = {}
+            for b_row in conn.execute(
+                "SELECT descriptor_name, descriptor_value FROM behavior_descriptors WHERE strategy_id = ?",
+                (strategy_id,),
+            ):
+                behavior_descriptor[b_row["descriptor_name"]] = b_row["descriptor_value"]
+
+            # Get eval context if present
+            eval_context = None
+            if row["eval_context_id"]:
+                ctx_row = conn.execute(
+                    "SELECT * FROM eval_contexts WHERE context_id = ?",
+                    (row["eval_context_id"],),
+                ).fetchone()
+                if ctx_row:
+                    eval_context = EvaluationContext(
+                        dataset_id=ctx_row["dataset_id"] or "",
+                        dataset_source=ctx_row["dataset_source"] or "",
+                        timeframe=ctx_row["timeframe"] or "",
+                        train_start=ctx_row["train_start"] or "",
+                        train_end=ctx_row["train_end"] or "",
+                        val_start=ctx_row["val_start"] or "",
+                        val_end=ctx_row["val_end"] or "",
+                        test_start=ctx_row["test_start"] or "",
+                        test_end=ctx_row["test_end"] or "",
+                        initial_capital=ctx_row["initial_capital"] or 10000.0,
+                        commission=ctx_row["commission"] or 0.002,
+                        slippage=ctx_row["slippage"] or 0.0,
+                        backtest_engine=ctx_row["backtest_engine"] or "backtesting.py",
+                    )
+
+            return StrategyRecord(
+                id=row["id"],
+                code=row["code"],
+                class_name=row["class_name"],
+                status=StrategyStatus(row["status"]),
+                parent_ids=parent_ids,
+                mutation_text=row["mutation_text"] or "",
+                generation=row["generation"],
+                metrics=metrics,
+                tags=tags,
+                behavior_descriptor=behavior_descriptor,
+                eval_context=eval_context,
+                eval_context_id=row["eval_context_id"] or "",
+                fold=row["fold"],
+                asset=row["asset"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                improvement_delta=row["improvement_delta"],
+                next_method_excerpt=row["next_method_excerpt"] or "",
+                diff_from_parent=row["diff_from_parent"] or "",
+            )
+
+    def query(self, filters: Dict) -> List[StrategyRecord]:
+        """Query strategies with filters."""
+        conditions = []
+        params: List = []
+
+        # Build query dynamically
+        base_query = "SELECT DISTINCT s.id FROM strategies s"
+        joins = []
+
+        if "status" in filters:
+            status_val = (
+                filters["status"].value
+                if isinstance(filters["status"], StrategyStatus)
+                else filters["status"]
+            )
+            conditions.append("s.status = ?")
+            params.append(status_val)
+
+        if "eval_context_id" in filters:
+            conditions.append("s.eval_context_id = ?")
+            params.append(filters["eval_context_id"])
+
+        if "tags" in filters:
+            joins.append("JOIN tags t ON s.id = t.strategy_id")
+            placeholders = ",".join(["?" for _ in filters["tags"]])
+            conditions.append(f"t.tag IN ({placeholders})")
+            params.extend(filters["tags"])
+
+        if "min_return" in filters:
+            joins.append("JOIN metrics m_ret ON s.id = m_ret.strategy_id")
+            conditions.append(
+                "m_ret.metric_name = 'ann_return' AND m_ret.metric_value >= ?"
+            )
+            params.append(filters["min_return"])
+
+        if "max_drawdown" in filters:
+            joins.append("JOIN metrics m_dd ON s.id = m_dd.strategy_id")
+            conditions.append(
+                "m_dd.metric_name = 'max_drawdown' AND ABS(m_dd.metric_value) <= ?"
+            )
+            params.append(abs(filters["max_drawdown"]))
+
+        if "generation" in filters:
+            conditions.append("s.generation = ?")
+            params.append(filters["generation"])
+
+        if "parent_id" in filters:
+            joins.append("JOIN strategy_parents sp ON s.id = sp.strategy_id")
+            conditions.append("sp.parent_id = ?")
+            params.append(filters["parent_id"])
+
+        # Build final query
+        query = base_query
+        # Dedupe joins while preserving order
+        seen_joins = set()
+        for join in joins:
+            if join not in seen_joins:
+                query += f" {join}"
+                seen_joins.add(join)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        with self._get_conn() as conn:
+            ids = [row["id"] for row in conn.execute(query, params)]
+
+        # FIX: Load once, not twice!
+        records = [self.load(id) for id in ids]
+        return [r for r in records if r is not None]
+
+    def list_all(self) -> List[str]:
+        """List all strategy IDs."""
+        with self._get_conn() as conn:
+            return [row["id"] for row in conn.execute("SELECT id FROM strategies")]
+
+    def delete(self, strategy_id: str) -> bool:
+        """Delete a strategy and its related records."""
+        with self._get_conn() as conn:
+            # Check if exists first
+            row = conn.execute(
+                "SELECT id FROM strategies WHERE id = ?", (strategy_id,)
+            ).fetchone()
+            if not row:
+                return False
+
+            # Delete related records first (foreign key constraints)
+            conn.execute("DELETE FROM tags WHERE strategy_id = ?", (strategy_id,))
+            conn.execute("DELETE FROM metrics WHERE strategy_id = ?", (strategy_id,))
+            conn.execute(
+                "DELETE FROM strategy_parents WHERE strategy_id = ?", (strategy_id,)
+            )
+            conn.execute(
+                "DELETE FROM behavior_descriptors WHERE strategy_id = ?", (strategy_id,)
+            )
+            conn.execute("DELETE FROM strategies WHERE id = ?", (strategy_id,))
+            return True
+
+    def count(self) -> int:
+        """Return total number of strategies."""
+        with self._get_conn() as conn:
+            return conn.execute("SELECT COUNT(*) FROM strategies").fetchone()[0]
+
+    def get_children(self, strategy_id: str) -> List[str]:
+        """Get IDs of all direct children of a strategy."""
+        with self._get_conn() as conn:
+            return [
+                row["strategy_id"]
+                for row in conn.execute(
+                    "SELECT strategy_id FROM strategy_parents WHERE parent_id = ?",
+                    (strategy_id,),
+                )
+            ]
+
+    def get_top_performers(
+        self,
+        n: int = 10,
+        metric: str = "ann_return",
+        eval_context_id: Optional[str] = None,
+        status: StrategyStatus = StrategyStatus.ACCEPTED,
+    ) -> List[str]:
+        """Get IDs of top n performers by a metric.
+
+        Args:
+            n: Number of top performers to return.
+            metric: Metric to sort by (default: ann_return).
+            eval_context_id: Filter by evaluation context.
+            status: Filter by status (default: ACCEPTED).
+
+        Returns:
+            List of strategy IDs sorted by metric (descending).
+        """
+        query = """
+            SELECT s.id, m.metric_value
+            FROM strategies s
+            JOIN metrics m ON s.id = m.strategy_id
+            WHERE s.status = ?
+            AND m.metric_name = ?
+        """
+        params: List = [status.value, metric]
+
+        if eval_context_id is not None:
+            query += " AND s.eval_context_id = ?"
+            params.append(eval_context_id)
+
+        query += " ORDER BY m.metric_value DESC LIMIT ?"
+        params.append(n)
+
+        with self._get_conn() as conn:
+            return [row["id"] for row in conn.execute(query, params)]
 
 
 class ProgramDatabase:

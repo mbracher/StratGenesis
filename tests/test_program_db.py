@@ -8,6 +8,7 @@ from pathlib import Path
 from profit.program_db import (
     ProgramDatabase,
     JsonFileBackend,
+    SqliteBackend,
     StrategyRecord,
     StrategyStatus,
     EvaluationContext,
@@ -1029,3 +1030,505 @@ class TestJsonFileBackendPhase13B:
         assert len(top_ctx1) == 1
         record = backend.load(top_ctx1[0])
         assert record.class_name == "B"
+
+
+# Phase 13C Tests
+
+
+class TestSqliteBackend:
+    """Test SqliteBackend implementation (Phase 13C)."""
+
+    @pytest.fixture
+    def backend(self):
+        """Create a temporary SQLite backend for testing."""
+        tmpfile = tempfile.mktemp(suffix=".sqlite")
+        yield SqliteBackend(tmpfile)
+        Path(tmpfile).unlink(missing_ok=True)
+
+    def test_save_and_load(self, backend):
+        """Should save and load a strategy record."""
+        record = StrategyRecord(
+            code="class Test: pass",
+            class_name="Test",
+            status=StrategyStatus.ACCEPTED,
+            metrics={"ann_return": 15.0, "sharpe": 1.2},
+        )
+        strategy_id = backend.save(record)
+        loaded = backend.load(strategy_id)
+
+        assert loaded is not None
+        assert loaded.class_name == "Test"
+        assert loaded.metrics["ann_return"] == 15.0
+        assert loaded.metrics["sharpe"] == 1.2
+        assert loaded.status == StrategyStatus.ACCEPTED
+
+    def test_load_nonexistent(self, backend):
+        """Should return None for nonexistent ID."""
+        result = backend.load("nonexistent")
+        assert result is None
+
+    def test_parent_join_table(self, backend):
+        """Should store parent relationships in proper join table."""
+        parent = StrategyRecord(class_name="Parent")
+        parent_id = backend.save(parent)
+
+        child = StrategyRecord(class_name="Child", parent_ids=[parent_id])
+        child_id = backend.save(child)
+
+        # Query by parent should work correctly
+        children = backend.query({"parent_id": parent_id})
+        assert len(children) == 1
+        assert children[0].id == child_id
+
+        # Loaded child should have parent_ids
+        loaded = backend.load(child_id)
+        assert parent_id in loaded.parent_ids
+
+    def test_multiple_parents(self, backend):
+        """Should handle strategies with multiple parents."""
+        parent1 = StrategyRecord(class_name="Parent1")
+        parent1_id = backend.save(parent1)
+
+        parent2 = StrategyRecord(class_name="Parent2")
+        parent2_id = backend.save(parent2)
+
+        child = StrategyRecord(class_name="Child", parent_ids=[parent1_id, parent2_id])
+        child_id = backend.save(child)
+
+        loaded = backend.load(child_id)
+        assert parent1_id in loaded.parent_ids
+        assert parent2_id in loaded.parent_ids
+
+    def test_query_by_status(self, backend):
+        """Should query by status."""
+        backend.save(StrategyRecord(class_name="A", status=StrategyStatus.ACCEPTED))
+        backend.save(StrategyRecord(class_name="B", status=StrategyStatus.REJECTED))
+        backend.save(StrategyRecord(class_name="C", status=StrategyStatus.ACCEPTED))
+
+        accepted = backend.query({"status": StrategyStatus.ACCEPTED})
+        assert len(accepted) == 2
+        assert all(r.status == StrategyStatus.ACCEPTED for r in accepted)
+
+    def test_query_by_tags(self, backend):
+        """Should query by tags."""
+        backend.save(StrategyRecord(class_name="A", tags=["trend"]))
+        backend.save(StrategyRecord(class_name="B", tags=["momentum"]))
+        backend.save(StrategyRecord(class_name="C", tags=["trend", "oscillator"]))
+
+        trend = backend.query({"tags": ["trend"]})
+        assert len(trend) == 2
+
+    def test_query_by_generation(self, backend):
+        """Should query by generation."""
+        backend.save(StrategyRecord(class_name="A", generation=0))
+        backend.save(StrategyRecord(class_name="B", generation=1))
+        backend.save(StrategyRecord(class_name="C", generation=1))
+
+        gen1 = backend.query({"generation": 1})
+        assert len(gen1) == 2
+
+    def test_query_by_eval_context_id(self, backend):
+        """Should query by eval_context_id."""
+        backend.save(StrategyRecord(class_name="A", eval_context_id="ctx1"))
+        backend.save(StrategyRecord(class_name="B", eval_context_id="ctx1"))
+        backend.save(StrategyRecord(class_name="C", eval_context_id="ctx2"))
+
+        ctx1 = backend.query({"eval_context_id": "ctx1"})
+        assert len(ctx1) == 2
+
+    def test_query_loads_once_not_twice(self, backend):
+        """Regression test: query should not double-load strategies."""
+        backend.save(StrategyRecord(class_name="Test"))
+        results = backend.query({})
+        assert len(results) == 1
+
+    def test_list_all(self, backend):
+        """Should list all strategy IDs."""
+        backend.save(StrategyRecord(class_name="A"))
+        backend.save(StrategyRecord(class_name="B"))
+
+        ids = backend.list_all()
+        assert len(ids) == 2
+
+    def test_delete(self, backend):
+        """Should delete a strategy and all related records."""
+        record = StrategyRecord(
+            class_name="ToDelete",
+            tags=["test"],
+            metrics={"ann_return": 10},
+            behavior_descriptor={"risk_bin": 1},
+        )
+        strategy_id = backend.save(record)
+
+        assert backend.load(strategy_id) is not None
+        result = backend.delete(strategy_id)
+        assert result is True
+        assert backend.load(strategy_id) is None
+
+    def test_delete_nonexistent(self, backend):
+        """Should return False for nonexistent delete."""
+        result = backend.delete("nonexistent")
+        assert result is False
+
+    def test_count(self, backend):
+        """Should return correct count."""
+        assert backend.count() == 0
+        backend.save(StrategyRecord(class_name="A"))
+        assert backend.count() == 1
+        backend.save(StrategyRecord(class_name="B"))
+        assert backend.count() == 2
+
+    def test_get_children(self, backend):
+        """Should return children of a strategy."""
+        parent = StrategyRecord(class_name="Parent")
+        parent_id = backend.save(parent)
+
+        child1 = StrategyRecord(class_name="Child1", parent_ids=[parent_id])
+        child1_id = backend.save(child1)
+
+        child2 = StrategyRecord(class_name="Child2", parent_ids=[parent_id])
+        child2_id = backend.save(child2)
+
+        children = backend.get_children(parent_id)
+        assert child1_id in children
+        assert child2_id in children
+
+    def test_get_top_performers(self, backend):
+        """Should return top performers by metric."""
+        backend.save(
+            StrategyRecord(
+                class_name="A",
+                metrics={"ann_return": 10.0},
+                status=StrategyStatus.ACCEPTED,
+            )
+        )
+        backend.save(
+            StrategyRecord(
+                class_name="B",
+                metrics={"ann_return": 20.0},
+                status=StrategyStatus.ACCEPTED,
+            )
+        )
+        backend.save(
+            StrategyRecord(
+                class_name="C",
+                metrics={"ann_return": 15.0},
+                status=StrategyStatus.ACCEPTED,
+            )
+        )
+
+        top = backend.get_top_performers(n=2, metric="ann_return")
+        assert len(top) == 2
+
+        # Verify order
+        records = [backend.load(id) for id in top]
+        assert records[0].metrics["ann_return"] == 20.0
+        assert records[1].metrics["ann_return"] == 15.0
+
+    def test_saves_and_loads_eval_context(self, backend):
+        """Should correctly save and load EvaluationContext."""
+        ctx = EvaluationContext(
+            dataset_id="SPY",
+            dataset_source="yahoo_finance",
+            timeframe="1D",
+            train_start="2020-01-01",
+            train_end="2022-06-30",
+            initial_capital=50000.0,
+        )
+
+        record = StrategyRecord(
+            code="class Test: pass",
+            class_name="Test",
+            eval_context=ctx,
+            eval_context_id=ctx.context_id(),
+        )
+
+        strategy_id = backend.save(record)
+        loaded = backend.load(strategy_id)
+
+        assert loaded is not None
+        assert loaded.eval_context is not None
+        assert loaded.eval_context.dataset_id == "SPY"
+        assert loaded.eval_context.dataset_source == "yahoo_finance"
+        assert loaded.eval_context.initial_capital == 50000.0
+        assert loaded.eval_context_id == ctx.context_id()
+
+    def test_behavior_descriptors(self, backend):
+        """Should save and load behavior descriptors."""
+        record = StrategyRecord(
+            class_name="Test",
+            behavior_descriptor={"trade_freq_bin": 1, "risk_bin": 2, "win_bin": 0},
+        )
+
+        strategy_id = backend.save(record)
+        loaded = backend.load(strategy_id)
+
+        assert loaded.behavior_descriptor["trade_freq_bin"] == 1
+        assert loaded.behavior_descriptor["risk_bin"] == 2
+        assert loaded.behavior_descriptor["win_bin"] == 0
+
+    def test_update_existing(self, backend):
+        """Should update an existing strategy (INSERT OR REPLACE)."""
+        record = StrategyRecord(
+            code="class Test: pass",
+            class_name="Test",
+            metrics={"ann_return": 10.0},
+        )
+        strategy_id = backend.save(record)
+
+        # Update the record
+        record.metrics = {"ann_return": 20.0}
+        record.tags = ["updated"]
+        backend.save(record)
+
+        # Verify update
+        loaded = backend.load(strategy_id)
+        assert loaded.metrics["ann_return"] == 20.0
+        assert "updated" in loaded.tags
+
+
+class TestProgramDatabaseWithSqliteBackend:
+    """Test ProgramDatabase with SqliteBackend (Phase 13C)."""
+
+    @pytest.fixture
+    def db(self):
+        """Create a temporary database with SQLite backend."""
+        tmpfile = tempfile.mktemp(suffix=".sqlite")
+        yield ProgramDatabase(SqliteBackend(tmpfile))
+        Path(tmpfile).unlink(missing_ok=True)
+
+    def test_register_and_get_strategy(self, db):
+        """Should register and retrieve a strategy."""
+        strategy_id = db.register_strategy(
+            code="class Test: pass",
+            class_name="TestStrategy",
+            parent_ids=[],
+            mutation_text="Initial strategy",
+            metrics={"ann_return": 15.0},
+            tags=["trend"],
+        )
+
+        record = db.get_strategy(strategy_id)
+        assert record is not None
+        assert record.class_name == "TestStrategy"
+        assert record.metrics["ann_return"] == 15.0
+
+    def test_lineage_tracking(self, db):
+        """Should track lineage through DB IDs with SQLite backend."""
+        id1 = db.register_strategy(
+            code="",
+            class_name="Gen0",
+            parent_ids=[],
+            mutation_text="",
+            metrics={},
+            tags=[],
+            generation=0,
+        )
+        id2 = db.register_strategy(
+            code="",
+            class_name="Gen1",
+            parent_ids=[id1],
+            mutation_text="",
+            metrics={},
+            tags=[],
+            generation=1,
+        )
+        id3 = db.register_strategy(
+            code="",
+            class_name="Gen2",
+            parent_ids=[id2],
+            mutation_text="",
+            metrics={},
+            tags=[],
+            generation=2,
+        )
+
+        lineage = db.get_lineage(id3)
+        assert len(lineage) == 2
+        assert lineage[0].id == id1
+        assert lineage[1].id == id2
+
+    def test_sample_inspirations_with_sqlite(self, db):
+        """Should sample inspirations correctly with SQLite backend."""
+        for i in range(5):
+            db.register_strategy(
+                code="",
+                class_name=f"Strategy{i}",
+                parent_ids=[],
+                mutation_text="",
+                metrics={"ann_return": i * 5},
+                tags=["trend"] if i % 2 == 0 else ["momentum"],
+                improvement_delta=float(i),
+            )
+
+        results = db.sample_inspirations(n=3, mode="mixed")
+        assert len(results) == 3
+
+    def test_get_stats(self, db):
+        """Should return correct stats with SQLite backend."""
+        db.register_strategy(
+            code="",
+            class_name="A",
+            parent_ids=[],
+            mutation_text="",
+            metrics={"ann_return": 10},
+            tags=["trend"],
+            status=StrategyStatus.ACCEPTED,
+        )
+        db.register_strategy(
+            code="",
+            class_name="B",
+            parent_ids=[],
+            mutation_text="",
+            metrics={"ann_return": 20},
+            tags=["momentum"],
+            status=StrategyStatus.ACCEPTED,
+        )
+        db.register_strategy(
+            code="",
+            class_name="C",
+            parent_ids=[],
+            mutation_text="",
+            metrics={},
+            tags=[],
+            status=StrategyStatus.REJECTED,
+        )
+
+        stats = db.get_stats()
+        assert stats["count"] == 3
+        assert stats["accepted"] == 2
+        assert stats["rejected"] == 1
+
+
+class TestBackendComparison:
+    """Test that both backends produce equivalent results (Phase 13C)."""
+
+    @pytest.fixture
+    def json_backend(self):
+        """Create JSON backend."""
+        tmpdir = tempfile.mkdtemp()
+        yield JsonFileBackend(tmpdir)
+        shutil.rmtree(tmpdir)
+
+    @pytest.fixture
+    def sqlite_backend(self):
+        """Create SQLite backend."""
+        tmpfile = tempfile.mktemp(suffix=".sqlite")
+        yield SqliteBackend(tmpfile)
+        Path(tmpfile).unlink(missing_ok=True)
+
+    def test_equivalent_save_load(self, json_backend, sqlite_backend):
+        """Both backends should produce equivalent save/load behavior."""
+        record = StrategyRecord(
+            code="class Test: pass",
+            class_name="Test",
+            status=StrategyStatus.ACCEPTED,
+            metrics={"ann_return": 15.0, "sharpe": 1.2},
+            tags=["trend", "momentum"],
+            parent_ids=[],
+            generation=3,
+            fold=2,
+            improvement_delta=5.0,
+        )
+
+        json_id = json_backend.save(record)
+        # Create new record with same ID for sqlite
+        record_sqlite = StrategyRecord(
+            id=json_id,
+            code="class Test: pass",
+            class_name="Test",
+            status=StrategyStatus.ACCEPTED,
+            metrics={"ann_return": 15.0, "sharpe": 1.2},
+            tags=["trend", "momentum"],
+            parent_ids=[],
+            generation=3,
+            fold=2,
+            improvement_delta=5.0,
+        )
+        sqlite_backend.save(record_sqlite)
+
+        json_loaded = json_backend.load(json_id)
+        sqlite_loaded = sqlite_backend.load(json_id)
+
+        assert json_loaded.class_name == sqlite_loaded.class_name
+        assert json_loaded.status == sqlite_loaded.status
+        assert json_loaded.metrics == sqlite_loaded.metrics
+        assert set(json_loaded.tags) == set(sqlite_loaded.tags)
+        assert json_loaded.generation == sqlite_loaded.generation
+
+    def test_equivalent_query_by_status(self, json_backend, sqlite_backend):
+        """Both backends should produce equivalent query results."""
+        records = [
+            StrategyRecord(class_name="A", status=StrategyStatus.ACCEPTED),
+            StrategyRecord(class_name="B", status=StrategyStatus.REJECTED),
+            StrategyRecord(class_name="C", status=StrategyStatus.ACCEPTED),
+        ]
+
+        for r in records:
+            json_backend.save(r)
+            sqlite_backend.save(r)
+
+        json_results = json_backend.query({"status": StrategyStatus.ACCEPTED})
+        sqlite_results = sqlite_backend.query({"status": StrategyStatus.ACCEPTED})
+
+        assert len(json_results) == len(sqlite_results) == 2
+
+
+class TestPerformance:
+    """Performance tests for backends (Phase 13C)."""
+
+    def test_sqlite_handles_many_records(self):
+        """SQLite should handle many records efficiently."""
+        tmpfile = tempfile.mktemp(suffix=".sqlite")
+        backend = SqliteBackend(tmpfile)
+
+        try:
+            # Insert 100 records
+            for i in range(100):
+                record = StrategyRecord(
+                    class_name=f"Strategy{i}",
+                    metrics={"ann_return": float(i)},
+                    tags=[f"tag{i % 5}"],
+                    generation=i % 10,
+                )
+                backend.save(record)
+
+            # Verify count
+            assert backend.count() == 100
+
+            # Query should work
+            gen5 = backend.query({"generation": 5})
+            assert len(gen5) == 10
+
+            # Top performers should work
+            top = backend.get_top_performers(n=5)
+            assert len(top) == 5
+
+        finally:
+            Path(tmpfile).unlink(missing_ok=True)
+
+    def test_json_handles_many_records(self):
+        """JSON backend should handle many records."""
+        tmpdir = tempfile.mkdtemp()
+        backend = JsonFileBackend(tmpdir)
+
+        try:
+            # Insert 100 records
+            for i in range(100):
+                record = StrategyRecord(
+                    class_name=f"Strategy{i}",
+                    metrics={"ann_return": float(i)},
+                    tags=[f"tag{i % 5}"],
+                    generation=i % 10,
+                )
+                backend.save(record)
+
+            # Verify count
+            assert backend.count() == 100
+
+            # Query should work
+            gen5 = backend.query({"generation": 5})
+            assert len(gen5) == 10
+
+        finally:
+            shutil.rmtree(tmpdir)

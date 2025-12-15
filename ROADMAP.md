@@ -22,7 +22,7 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | 10 | Documentation & Extensions | [`specs/phase-10-documentation.md`](specs/phase-10-documentation.md) | ✅ |
 | 11 | Strategy Persistence | [`specs/phase-11-strategy-persistence.md`](specs/phase-11-strategy-persistence.md) | ✅ |
 | 12 | Dual-Model LLM Configuration | [`specs/phase-12-dual-model-llm.md`](specs/phase-12-dual-model-llm.md) | ✅ |
-| 13 | Program Database | [`specs/phase-13-program-database.md`](specs/phase-13-program-database.md) | 🔄 13B |
+| 13 | Program Database | [`specs/phase-13-program-database.md`](specs/phase-13-program-database.md) | ✅ 13C |
 | 14 | Diff-Based Mutations | [`specs/phase-14-diff-based-mutations.md`](specs/phase-14-diff-based-mutations.md) | |
 | 15 | Multi-Metric Evaluation | [`specs/phase-15-multi-metric-evaluation.md`](specs/phase-15-multi-metric-evaluation.md) | |
 | 16 | Research & Data Agents | [`specs/phase-16-research-data-agents.md`](specs/phase-16-research-data-agents.md) | |
@@ -237,10 +237,17 @@ AlphaEvolve-style program database with backend abstraction for strategy storage
 - [x] Updated StrategyRecord with eval_context and next_method_excerpt fields
 - [x] Tests for Phase 13B functionality
 
-### Phase 13C-D (Future)
-- [ ] `SqliteBackend` implementation
-- [ ] Migration script from `StrategyPersister`
-- [ ] MAP-Elites style sampling
+### Phase 13C (Scale & Quality) ✅
+- [x] `SqliteBackend` implementation with proper parent join table
+- [x] Atomic writes for JSON backend
+- [x] Append-only index with compaction
+- [x] CLI arguments (`--db-backend`, `--db-path`, `--no-inspirations`)
+- [x] Performance tests for both backends
+
+### Phase 13D (Future)
+- [ ] MAP-Elites style sampling (`_sample_map_elites()`)
+- [ ] Cross-island sampling (`_sample_cross_island()`)
+- [ ] Multi-objective selection support
 
 ---
 

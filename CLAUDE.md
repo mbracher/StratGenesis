@@ -91,7 +91,8 @@ Detailed implementation specs are in the `specs/` directory:
   - `ProgramDatabase` class for strategy storage and inspiration sampling
   - `StrategyRecord` dataclass with full metadata and lineage
   - `EvaluationContext` for apples-to-apples comparison
-  - `JsonFileBackend` for file-based storage
+  - `JsonFileBackend` for file-based storage (default)
+  - `SqliteBackend` for larger databases with efficient queries
   - `sample_inspirations()` - exploitation, exploration, trajectory, and mixed modes
   - `generate_improvement_with_inspirations()` in LLMClient for richer prompts
 
