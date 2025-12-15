@@ -62,6 +62,7 @@ Detailed implementation specs are in the `specs/` directory:
 | `phase-10-documentation.md` | Documentation and extensions |
 | `phase-11-strategy-persistence.md` | Strategy persistence to disk |
 | `phase-12-dual-model-llm.md` | Dual-model LLM configuration |
+| `phase-13-program-database.md` | AlphaEvolve-style program database |
 
 **Always consult the relevant spec file before implementing a phase.**
 
@@ -85,6 +86,14 @@ Detailed implementation specs are in the `specs/` directory:
   - `run_backtest()` - backtesting utility using backtesting.py
   - `evolve_strategy()` - evolutionary loop with MAS (Minimum Acceptable Score) threshold
   - `walk_forward_optimize()` - full walk-forward optimization across folds
+
+- **program_db.py** - AlphaEvolve-style program database
+  - `ProgramDatabase` class for strategy storage and inspiration sampling
+  - `StrategyRecord` dataclass with full metadata and lineage
+  - `EvaluationContext` for apples-to-apples comparison
+  - `JsonFileBackend` for file-based storage
+  - `sample_inspirations()` - exploitation, exploration, trajectory, and mixed modes
+  - `generate_improvement_with_inspirations()` in LLMClient for richer prompts
 
 - **main.py** - Entry point and CLI
 

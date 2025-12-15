@@ -10,10 +10,17 @@ Phase 13A: Minimal Working DB
 - ProgramDatabaseBackend protocol
 - JsonFileBackend implementation
 - ProgramDatabase class with registration and queries
+
+Phase 13B: Make It Useful
+- EvaluationContext dataclass for apples-to-apples comparison
+- eval_context_id filtering
+- STANDARD_METRICS schema for consistent metric naming
+- next_method_excerpt extraction for richer LLM prompts
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -41,6 +48,66 @@ class StrategyStatus(str, Enum):
     SEED = "seed"  # Initial seed strategy
 
 
+# Standard metrics schema for consistent naming across the system (Phase 13B)
+STANDARD_METRICS = {
+    # Returns
+    "ann_return": "Annualized return percentage",
+    "total_return": "Total return percentage",
+    # Risk-adjusted
+    "sharpe": "Sharpe ratio (risk-free=0)",
+    "sortino": "Sortino ratio",
+    "calmar": "Calmar ratio (return/max_dd)",
+    # Risk
+    "max_drawdown": "Maximum drawdown (negative)",
+    "volatility": "Annualized volatility",
+    "var_95": "Value at Risk 95%",
+    # Trading behavior
+    "trade_count": "Number of trades",
+    "win_rate": "Percentage of winning trades",
+    "avg_trade_return": "Average return per trade",
+    "avg_holding_period": "Average holding period in bars",
+    "exposure_time": "Percentage of time in market",
+    # Profit metrics
+    "profit_factor": "Gross profit / gross loss",
+    "expectancy": "Expected value per trade",
+}
+
+
+@dataclass
+class EvaluationContext:
+    """Captures the evaluation environment for reproducibility.
+
+    Strategies should only be compared within the same context.
+    This is CRITICAL for apples-to-apples comparison in the program database.
+    """
+
+    dataset_id: str = ""  # Hash or identifier of dataset
+    dataset_source: str = ""  # e.g., "yahoo_finance", "polygon"
+    timeframe: str = ""  # e.g., "1D", "1H"
+    train_start: str = ""
+    train_end: str = ""
+    val_start: str = ""
+    val_end: str = ""
+    test_start: str = ""
+    test_end: str = ""
+    initial_capital: float = 10000.0
+    commission: float = 0.002
+    slippage: float = 0.0
+    backtest_engine: str = "backtesting.py"
+
+    def context_id(self) -> str:
+        """Generate a hash of the evaluation context.
+
+        This ID is used to filter strategies for comparison - only strategies
+        evaluated in the same context should be compared.
+        """
+        content = (
+            f"{self.dataset_id}:{self.timeframe}:{self.train_start}:"
+            f"{self.val_end}:{self.commission}"
+        )
+        return hashlib.md5(content.encode()).hexdigest()[:12]
+
+
 @dataclass
 class StrategyRecord:
     """Complete record of an evolved strategy.
@@ -64,11 +131,19 @@ class StrategyRecord:
     # Evaluation results (store FULL metric vector)
     metrics: Dict[str, float] = field(default_factory=dict)
 
+    # Evaluation context (Phase 13B: CRITICAL for apples-to-apples comparison)
+    eval_context: Optional[EvaluationContext] = None
+    eval_context_id: str = ""  # Cached context hash for fast filtering
+
     # Classification
     tags: List[str] = field(default_factory=list)
 
     # Behavior descriptor for MAP-Elites style diversity (Phase 13D)
     behavior_descriptor: Dict[str, float] = field(default_factory=dict)
+
+    # Code analysis (Phase 13B: for richer LLM prompts)
+    next_method_excerpt: str = ""  # First ~80 lines of next() method
+    diff_from_parent: str = ""  # Git-style diff if available
 
     # Metadata
     fold: Optional[int] = None
@@ -100,6 +175,7 @@ class ProgramDatabaseBackend(Protocol):
         - generation: int - specific generation
         - parent_id: str - children of a specific parent
         - status: StrategyStatus - filter by status
+        - eval_context_id: str - filter by evaluation context (Phase 13B)
         """
         ...
 
@@ -193,6 +269,11 @@ class JsonFileBackend:
             if isinstance(record.status, StrategyStatus)
             else record.status
         )
+        # Handle EvaluationContext serialization (Phase 13B)
+        if record.eval_context is not None:
+            record_dict["eval_context"] = asdict(record.eval_context)
+        else:
+            record_dict["eval_context"] = None
 
         # Save full record atomically
         record_path = self.strategies_dir / f"{record.id}.json"
@@ -211,6 +292,7 @@ class JsonFileBackend:
             "metrics": record.metrics,
             "generation": record.generation,
             "parent_ids": record.parent_ids,
+            "eval_context_id": record.eval_context_id,  # Phase 13B: for fast filtering
             "created_at": record_dict["created_at"],
             "improvement_delta": record.improvement_delta,
             "behavior_descriptor": record.behavior_descriptor,
@@ -250,6 +332,10 @@ class JsonFileBackend:
         if "status" in data and isinstance(data["status"], str):
             data["status"] = StrategyStatus(data["status"])
 
+        # Convert eval_context dict back to EvaluationContext object (Phase 13B)
+        if data.get("eval_context") is not None:
+            data["eval_context"] = EvaluationContext(**data["eval_context"])
+
         return StrategyRecord(**data)
 
     def query(self, filters: Dict) -> List[StrategyRecord]:
@@ -274,6 +360,11 @@ class JsonFileBackend:
                 else filters["status"]
             )
             if entry.get("status") != status_val:
+                return False
+
+        # Eval context filter (Phase 13B: CRITICAL for apples-to-apples comparison)
+        if "eval_context_id" in filters:
+            if entry.get("eval_context_id") != filters["eval_context_id"]:
                 return False
 
         # Tag filter (match any)
@@ -328,6 +419,7 @@ class JsonFileBackend:
         self,
         n: int = 10,
         metric: str = "ann_return",
+        eval_context_id: Optional[str] = None,
         status: StrategyStatus = StrategyStatus.ACCEPTED,
     ) -> List[str]:
         """Get IDs of top n performers by a metric.
@@ -335,13 +427,17 @@ class JsonFileBackend:
         Args:
             n: Number of top performers to return.
             metric: Metric to sort by (default: ann_return).
+            eval_context_id: Filter by evaluation context (Phase 13B).
             status: Filter by status (default: ACCEPTED).
 
         Returns:
             List of strategy IDs sorted by metric (descending).
         """
         filtered = [
-            e for e in self._index.values() if e.get("status") == status.value
+            e
+            for e in self._index.values()
+            if e.get("status") == status.value
+            and (eval_context_id is None or e.get("eval_context_id") == eval_context_id)
         ]
         sorted_entries = sorted(
             filtered,
@@ -382,6 +478,7 @@ class ProgramDatabase:
         generation: int = 0,
         fold: Optional[int] = None,
         asset: Optional[str] = None,
+        eval_context: Optional[EvaluationContext] = None,
         improvement_delta: float = 0.0,
     ) -> str:
         """Register a strategy in the database (accepted or rejected).
@@ -397,11 +494,18 @@ class ProgramDatabase:
             generation: Evolution generation number.
             fold: Walk-forward fold number.
             asset: Asset/symbol this strategy was evolved on.
+            eval_context: EvaluationContext for apples-to-apples comparison (Phase 13B).
             improvement_delta: Performance improvement over parent.
 
         Returns:
             The assigned strategy ID.
         """
+        # Auto-compute eval_context_id (Phase 13B)
+        eval_context_id = eval_context.context_id() if eval_context else ""
+
+        # Extract next() method for richer prompts (Phase 13B)
+        next_excerpt = self._extract_next_method(code)
+
         # Compute behavior descriptor
         behavior_descriptor = self._compute_behavior_descriptor(metrics)
 
@@ -416,10 +520,36 @@ class ProgramDatabase:
             generation=generation,
             fold=fold,
             asset=asset,
+            eval_context=eval_context,
+            eval_context_id=eval_context_id,
+            next_method_excerpt=next_excerpt,
             improvement_delta=improvement_delta,
             behavior_descriptor=behavior_descriptor,
         )
         return self.backend.save(record)
+
+    def _extract_next_method(self, code: str, max_lines: int = 80) -> str:
+        """Extract the next() method from strategy code for LLM prompts.
+
+        Phase 13B: This provides a focused code excerpt for inspiration sampling,
+        showing just the signal/entry/exit logic without boilerplate.
+
+        Args:
+            code: Full strategy source code.
+            max_lines: Maximum lines to extract (default: 80).
+
+        Returns:
+            The next() method body, or empty string if not found.
+        """
+        # Find next() method using regex
+        match = re.search(
+            r"def next\(self\):(.*?)(?=\n    def |\nclass |\Z)", code, re.DOTALL
+        )
+        if match:
+            next_code = "def next(self):" + match.group(1)
+            lines = next_code.split("\n")[:max_lines]
+            return "\n".join(lines)
+        return ""
 
     def _compute_behavior_descriptor(
         self, metrics: Dict[str, float]
@@ -496,6 +626,7 @@ class ProgramDatabase:
         n: int = 3,
         mode: str = "mixed",
         exclude_ids: Optional[List[str]] = None,
+        eval_context_id: Optional[str] = None,
         include_rejected: bool = False,
     ) -> List[StrategyRecord]:
         """Sample strategies for LLM inspiration.
@@ -510,6 +641,7 @@ class ProgramDatabase:
             n: Number of strategies to sample.
             mode: Sampling strategy.
             exclude_ids: Strategy IDs to exclude (e.g., current parent's DB ID).
+            eval_context_id: Only sample from same evaluation context (Phase 13B).
             include_rejected: Include rejected strategies (for negative examples).
 
         Returns:
@@ -519,6 +651,8 @@ class ProgramDatabase:
 
         # Build base filters
         filters = {}
+        if eval_context_id:
+            filters["eval_context_id"] = eval_context_id
         if not include_rejected:
             filters["status"] = StrategyStatus.ACCEPTED
 

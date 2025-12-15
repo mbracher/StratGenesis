@@ -10,6 +10,8 @@ from profit.program_db import (
     JsonFileBackend,
     StrategyRecord,
     StrategyStatus,
+    EvaluationContext,
+    STANDARD_METRICS,
 )
 
 
@@ -623,3 +625,407 @@ class TestProgramDatabase:
         """Should handle empty database."""
         stats = db.get_stats()
         assert stats["count"] == 0
+
+
+# Phase 13B Tests
+
+
+class TestEvaluationContext:
+    """Test EvaluationContext dataclass (Phase 13B)."""
+
+    def test_default_values(self):
+        """Should initialize with default values."""
+        ctx = EvaluationContext()
+
+        assert ctx.dataset_id == ""
+        assert ctx.initial_capital == 10000.0
+        assert ctx.commission == 0.002
+        assert ctx.backtest_engine == "backtesting.py"
+
+    def test_custom_values(self):
+        """Should accept custom values."""
+        ctx = EvaluationContext(
+            dataset_id="SPY_2020_2023",
+            dataset_source="yahoo_finance",
+            timeframe="1D",
+            train_start="2020-01-01",
+            train_end="2022-06-30",
+            val_start="2022-07-10",
+            val_end="2022-12-31",
+            initial_capital=50000.0,
+            commission=0.001,
+        )
+
+        assert ctx.dataset_id == "SPY_2020_2023"
+        assert ctx.dataset_source == "yahoo_finance"
+        assert ctx.timeframe == "1D"
+        assert ctx.initial_capital == 50000.0
+
+    def test_context_id_generation(self):
+        """Should generate consistent context ID hash."""
+        ctx1 = EvaluationContext(
+            dataset_id="SPY",
+            timeframe="1D",
+            train_start="2020-01-01",
+            val_end="2022-12-31",
+            commission=0.002,
+        )
+        ctx2 = EvaluationContext(
+            dataset_id="SPY",
+            timeframe="1D",
+            train_start="2020-01-01",
+            val_end="2022-12-31",
+            commission=0.002,
+        )
+        ctx3 = EvaluationContext(
+            dataset_id="AAPL",  # Different dataset
+            timeframe="1D",
+            train_start="2020-01-01",
+            val_end="2022-12-31",
+            commission=0.002,
+        )
+
+        # Same context should generate same ID
+        assert ctx1.context_id() == ctx2.context_id()
+        # Different context should generate different ID
+        assert ctx1.context_id() != ctx3.context_id()
+        # ID should be 12 characters
+        assert len(ctx1.context_id()) == 12
+
+
+class TestStandardMetrics:
+    """Test STANDARD_METRICS schema (Phase 13B)."""
+
+    def test_standard_metrics_defined(self):
+        """Should have expected standard metrics."""
+        assert "ann_return" in STANDARD_METRICS
+        assert "sharpe" in STANDARD_METRICS
+        assert "max_drawdown" in STANDARD_METRICS
+        assert "trade_count" in STANDARD_METRICS
+        assert "win_rate" in STANDARD_METRICS
+
+    def test_standard_metrics_has_descriptions(self):
+        """All metrics should have string descriptions."""
+        for metric, description in STANDARD_METRICS.items():
+            assert isinstance(metric, str)
+            assert isinstance(description, str)
+            assert len(description) > 0
+
+
+class TestEvalContextFiltering:
+    """Test eval_context_id filtering (Phase 13B)."""
+
+    @pytest.fixture
+    def db(self):
+        """Create a temporary database for testing."""
+        tmpdir = tempfile.mkdtemp()
+        yield ProgramDatabase(JsonFileBackend(tmpdir))
+        shutil.rmtree(tmpdir)
+
+    def test_register_with_eval_context(self, db):
+        """Should register strategy with eval context."""
+        ctx = EvaluationContext(
+            dataset_id="SPY",
+            timeframe="1D",
+            train_start="2020-01-01",
+            val_end="2022-12-31",
+        )
+
+        strategy_id = db.register_strategy(
+            code="class Test: pass",
+            class_name="TestStrategy",
+            parent_ids=[],
+            mutation_text="Test",
+            metrics={"ann_return": 15.0},
+            tags=["trend"],
+            eval_context=ctx,
+        )
+
+        record = db.get_strategy(strategy_id)
+        assert record is not None
+        assert record.eval_context is not None
+        assert record.eval_context.dataset_id == "SPY"
+        assert record.eval_context_id == ctx.context_id()
+
+    def test_query_by_eval_context_id(self, db):
+        """Should filter strategies by eval_context_id."""
+        ctx1 = EvaluationContext(dataset_id="SPY", train_start="2020-01-01")
+        ctx2 = EvaluationContext(dataset_id="AAPL", train_start="2020-01-01")
+
+        db.register_strategy(
+            code="",
+            class_name="SPY_Strategy",
+            parent_ids=[],
+            mutation_text="",
+            metrics={"ann_return": 10},
+            tags=[],
+            eval_context=ctx1,
+        )
+        db.register_strategy(
+            code="",
+            class_name="AAPL_Strategy",
+            parent_ids=[],
+            mutation_text="",
+            metrics={"ann_return": 20},
+            tags=[],
+            eval_context=ctx2,
+        )
+
+        # Should only get SPY strategy
+        results = db.sample_inspirations(n=10, eval_context_id=ctx1.context_id())
+        assert len(results) == 1
+        assert results[0].class_name == "SPY_Strategy"
+
+    def test_sample_inspirations_respects_context(self, db):
+        """Sample inspirations should respect eval_context_id filter."""
+        ctx1 = EvaluationContext(dataset_id="SPY", train_start="2020-01-01")
+        ctx2 = EvaluationContext(dataset_id="AAPL", train_start="2020-01-01")
+
+        # Register strategies in different contexts with improvement_delta for trajectory sampling
+        for i in range(3):
+            db.register_strategy(
+                code="",
+                class_name=f"SPY_Strategy_{i}",
+                parent_ids=[],
+                mutation_text="",
+                metrics={"ann_return": 10 + i},
+                tags=["trend"],
+                eval_context=ctx1,
+                improvement_delta=float(i + 1),  # For trajectory mode
+            )
+
+        for i in range(2):
+            db.register_strategy(
+                code="",
+                class_name=f"AAPL_Strategy_{i}",
+                parent_ids=[],
+                mutation_text="",
+                metrics={"ann_return": 20 + i},
+                tags=["trend"],
+                eval_context=ctx2,
+                improvement_delta=float(i + 1),
+            )
+
+        # Sample from ctx1 only - should only return SPY strategies
+        results = db.sample_inspirations(n=5, eval_context_id=ctx1.context_id())
+        assert len(results) <= 3  # Can't get more than available
+        assert len(results) >= 1  # Should get at least one
+        assert all("SPY" in r.class_name for r in results)
+
+        # Sample from ctx2 only - should only return AAPL strategies
+        results = db.sample_inspirations(n=5, eval_context_id=ctx2.context_id())
+        assert len(results) <= 2  # Can't get more than available
+        assert len(results) >= 1  # Should get at least one
+        assert all("AAPL" in r.class_name for r in results)
+
+
+class TestNextMethodExtraction:
+    """Test _extract_next_method functionality (Phase 13B)."""
+
+    @pytest.fixture
+    def db(self):
+        """Create a temporary database for testing."""
+        tmpdir = tempfile.mkdtemp()
+        yield ProgramDatabase(JsonFileBackend(tmpdir))
+        shutil.rmtree(tmpdir)
+
+    def test_extracts_next_method(self, db):
+        """Should extract next() method from strategy code."""
+        code = '''class EMACrossover(Strategy):
+    def init(self):
+        self.ema_short = self.I(EMA, self.data.Close, 50)
+        self.ema_long = self.I(EMA, self.data.Close, 200)
+
+    def next(self):
+        if crossover(self.ema_short, self.ema_long):
+            self.buy()
+        elif crossover(self.ema_long, self.ema_short):
+            self.sell()
+'''
+
+        strategy_id = db.register_strategy(
+            code=code,
+            class_name="EMACrossover",
+            parent_ids=[],
+            mutation_text="",
+            metrics={},
+            tags=[],
+        )
+
+        record = db.get_strategy(strategy_id)
+        assert record.next_method_excerpt != ""
+        assert "def next(self):" in record.next_method_excerpt
+        assert "crossover" in record.next_method_excerpt
+        # Should not include init method
+        assert "def init(self):" not in record.next_method_excerpt
+
+    def test_handles_code_without_next_method(self, db):
+        """Should handle code without next() method gracefully."""
+        code = '''class NoNext(Strategy):
+    def init(self):
+        pass
+'''
+
+        strategy_id = db.register_strategy(
+            code=code,
+            class_name="NoNext",
+            parent_ids=[],
+            mutation_text="",
+            metrics={},
+            tags=[],
+        )
+
+        record = db.get_strategy(strategy_id)
+        assert record.next_method_excerpt == ""
+
+    def test_truncates_long_next_method(self, db):
+        """Should truncate very long next() methods."""
+        # Create a next() method with many lines
+        lines = ["        pass"] * 100
+        code = f'''class LongNext(Strategy):
+    def init(self):
+        pass
+
+    def next(self):
+{chr(10).join(lines)}
+'''
+
+        strategy_id = db.register_strategy(
+            code=code,
+            class_name="LongNext",
+            parent_ids=[],
+            mutation_text="",
+            metrics={},
+            tags=[],
+        )
+
+        record = db.get_strategy(strategy_id)
+        # Should have excerpt, but limited to max_lines (default 80)
+        excerpt_lines = record.next_method_excerpt.split("\n")
+        assert len(excerpt_lines) <= 80
+
+
+class TestStrategyRecordPhase13BFields:
+    """Test new StrategyRecord fields added in Phase 13B."""
+
+    def test_new_fields_have_defaults(self):
+        """New Phase 13B fields should have sensible defaults."""
+        record = StrategyRecord()
+
+        assert record.eval_context is None
+        assert record.eval_context_id == ""
+        assert record.next_method_excerpt == ""
+        assert record.diff_from_parent == ""
+
+    def test_can_set_new_fields(self):
+        """Should be able to set Phase 13B fields."""
+        ctx = EvaluationContext(dataset_id="TEST")
+        record = StrategyRecord(
+            eval_context=ctx,
+            eval_context_id="abc123",
+            next_method_excerpt="def next(self): pass",
+            diff_from_parent="- old\n+ new",
+        )
+
+        assert record.eval_context == ctx
+        assert record.eval_context_id == "abc123"
+        assert record.next_method_excerpt == "def next(self): pass"
+        assert record.diff_from_parent == "- old\n+ new"
+
+
+class TestJsonFileBackendPhase13B:
+    """Test JsonFileBackend Phase 13B features."""
+
+    @pytest.fixture
+    def backend(self):
+        """Create a temporary backend for testing."""
+        tmpdir = tempfile.mkdtemp()
+        yield JsonFileBackend(tmpdir)
+        shutil.rmtree(tmpdir)
+
+    def test_saves_and_loads_eval_context(self, backend):
+        """Should correctly save and load EvaluationContext."""
+        ctx = EvaluationContext(
+            dataset_id="SPY",
+            dataset_source="yahoo_finance",
+            timeframe="1D",
+            train_start="2020-01-01",
+            train_end="2022-06-30",
+            initial_capital=50000.0,
+        )
+
+        record = StrategyRecord(
+            code="class Test: pass",
+            class_name="Test",
+            eval_context=ctx,
+            eval_context_id=ctx.context_id(),
+        )
+
+        strategy_id = backend.save(record)
+        loaded = backend.load(strategy_id)
+
+        assert loaded is not None
+        assert loaded.eval_context is not None
+        assert loaded.eval_context.dataset_id == "SPY"
+        assert loaded.eval_context.dataset_source == "yahoo_finance"
+        assert loaded.eval_context.initial_capital == 50000.0
+        assert loaded.eval_context_id == ctx.context_id()
+
+    def test_query_filters_by_eval_context_id(self, backend):
+        """Should filter by eval_context_id in queries."""
+        ctx1_id = "ctx1_12char"
+        ctx2_id = "ctx2_12char"
+
+        backend.save(StrategyRecord(class_name="A", eval_context_id=ctx1_id))
+        backend.save(StrategyRecord(class_name="B", eval_context_id=ctx1_id))
+        backend.save(StrategyRecord(class_name="C", eval_context_id=ctx2_id))
+
+        ctx1_results = backend.query({"eval_context_id": ctx1_id})
+        assert len(ctx1_results) == 2
+        assert all(r.class_name in ["A", "B"] for r in ctx1_results)
+
+        ctx2_results = backend.query({"eval_context_id": ctx2_id})
+        assert len(ctx2_results) == 1
+        assert ctx2_results[0].class_name == "C"
+
+    def test_get_top_performers_with_context(self, backend):
+        """get_top_performers should support eval_context_id filter."""
+        ctx1_id = "ctx1_12char"
+        ctx2_id = "ctx2_12char"
+
+        backend.save(
+            StrategyRecord(
+                class_name="A",
+                metrics={"ann_return": 10},
+                eval_context_id=ctx1_id,
+                status=StrategyStatus.ACCEPTED,
+            )
+        )
+        backend.save(
+            StrategyRecord(
+                class_name="B",
+                metrics={"ann_return": 20},
+                eval_context_id=ctx1_id,
+                status=StrategyStatus.ACCEPTED,
+            )
+        )
+        backend.save(
+            StrategyRecord(
+                class_name="C",
+                metrics={"ann_return": 30},
+                eval_context_id=ctx2_id,
+                status=StrategyStatus.ACCEPTED,
+            )
+        )
+
+        # Without context filter - should get C (highest return)
+        top = backend.get_top_performers(n=1)
+        assert len(top) == 1
+        record = backend.load(top[0])
+        assert record.class_name == "C"
+
+        # With context filter - should get B (highest in ctx1)
+        top_ctx1 = backend.get_top_performers(n=1, eval_context_id=ctx1_id)
+        assert len(top_ctx1) == 1
+        record = backend.load(top_ctx1[0])
+        assert record.class_name == "B"

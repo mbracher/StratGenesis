@@ -6,10 +6,19 @@ It implements the two-LLM architecture from the ProFiT paper:
 - LLM B (Coder): Applies improvements to generate new code
 
 Supports using different providers/models for each role (dual-model configuration).
+
+Phase 13B additions:
+- generate_improvement_with_inspirations(): Uses inspiration strategies for richer prompts
 """
+
+from __future__ import annotations
 
 import os
 import re
+from typing import TYPE_CHECKING, List
+
+if TYPE_CHECKING:
+    from profit.program_db import StrategyRecord
 
 try:
     import openai
@@ -140,6 +149,111 @@ class LLMClient:
             f"Performance Summary: {metrics_summary}\n\n"
             "Please suggest one concrete improvement (in a brief bullet or sentence)."
         )
+        return self._chat(
+            prompt,
+            provider=self.analyst_provider,
+            model=self.analyst_model,
+            expect_code=False,
+        )
+
+    def generate_improvement_with_inspirations(
+        self,
+        strategy_code: str,
+        metrics_summary: str,
+        inspirations: List["StrategyRecord"],
+        max_tokens_per_inspiration: int = 500,
+    ) -> str:
+        """Generate improvement proposal using inspiration from other strategies.
+
+        This is a Phase 13B enhancement that implements AlphaEvolve's key insight:
+        providing examples of successful strategies helps the LLM generate better mutations.
+
+        Includes:
+        - Multiple metrics (not just return) to avoid overfitting
+        - Code excerpts of signal/entry/exit logic (next() method)
+        - Diversity across inspirations
+
+        Args:
+            strategy_code: The current strategy's Python code.
+            metrics_summary: Performance metrics of current strategy.
+            inspirations: List of StrategyRecord objects for inspiration.
+            max_tokens_per_inspiration: Max code excerpt length per inspiration.
+
+        Returns:
+            Natural language improvement proposal.
+        """
+        # Build inspiration context with code excerpts and multi-metric info
+        inspiration_text = ""
+        if inspirations:
+            inspiration_text = "\n\nHere are successful strategies for inspiration:\n"
+            for i, insp in enumerate(inspirations, 1):
+                # Multi-metric summary
+                metrics = insp.metrics
+                ann_return = metrics.get("ann_return", "N/A")
+                sharpe = metrics.get("sharpe", "N/A")
+                max_dd = metrics.get("max_drawdown", "N/A")
+                trade_count = metrics.get("trade_count", "N/A")
+                win_rate = metrics.get("win_rate", "N/A")
+
+                # Format metrics with type checking
+                ann_str = f"{ann_return:.1f}%" if isinstance(ann_return, (int, float)) else "N/A"
+                sharpe_str = f"{sharpe:.2f}" if isinstance(sharpe, (int, float)) else "N/A"
+                dd_str = f"{max_dd:.1f}%" if isinstance(max_dd, (int, float)) else "N/A"
+                trades_str = str(int(trade_count)) if isinstance(trade_count, (int, float)) else "N/A"
+                wr_str = f"{win_rate:.0%}" if isinstance(win_rate, (int, float)) else "N/A"
+
+                metrics_str = (
+                    f"Return={ann_str}, Sharpe={sharpe_str}, MaxDD={dd_str}, "
+                    f"Trades={trades_str}, WinRate={wr_str}"
+                )
+
+                # Code excerpt (next() method or truncated code)
+                code_excerpt = (
+                    insp.next_method_excerpt
+                    if insp.next_method_excerpt
+                    else insp.code[:max_tokens_per_inspiration]
+                )
+
+                # Tags for context
+                tags_str = ", ".join(insp.tags) if insp.tags else "unclassified"
+
+                inspiration_text += f"""
+--- Inspiration {i}: {insp.class_name} ---
+Performance: {metrics_str}
+Tags: {tags_str}
+Key innovation: {insp.mutation_text}
+
+Signal/Entry/Exit logic:
+```python
+{code_excerpt}
+```
+"""
+
+        prompt = f"""You are a trading strategy improvement coach.
+Analyze the following strategy and suggest ONE specific improvement.
+
+Current Strategy:
+```python
+{strategy_code}
+```
+
+Current Performance: {metrics_summary}
+{inspiration_text}
+
+Based on the current strategy and the successful approaches above,
+suggest ONE concrete improvement. Consider:
+1. Signal generation patterns from the inspirations
+2. Entry/exit timing approaches
+3. Position sizing or risk management techniques
+4. Indicator combinations that worked well
+
+IMPORTANT:
+- Be specific and actionable
+- Your suggestion should be implementable as a code change
+- Consider multiple metrics, not just returns (Sharpe, drawdown, etc.)
+- Aim for robustness, not just higher returns
+"""
+
         return self._chat(
             prompt,
             provider=self.analyst_provider,
