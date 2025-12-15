@@ -22,6 +22,12 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | 10 | Documentation & Extensions | [`specs/phase-10-documentation.md`](specs/phase-10-documentation.md) | ✅ |
 | 11 | Strategy Persistence | [`specs/phase-11-strategy-persistence.md`](specs/phase-11-strategy-persistence.md) | ✅ |
 | 12 | Dual-Model LLM Configuration | [`specs/phase-12-dual-model-llm.md`](specs/phase-12-dual-model-llm.md) | ✅ |
+| 13 | Program Database | [`specs/phase-13-program-database.md`](specs/phase-13-program-database.md) | |
+| 14 | Diff-Based Mutations | [`specs/phase-14-diff-based-mutations.md`](specs/phase-14-diff-based-mutations.md) | |
+| 15 | Multi-Metric Evaluation | [`specs/phase-15-multi-metric-evaluation.md`](specs/phase-15-multi-metric-evaluation.md) | |
+| 16 | Research & Data Agents | [`specs/phase-16-research-data-agents.md`](specs/phase-16-research-data-agents.md) | |
+| 17 | Multi-Asset & Portfolio | [`specs/phase-17-multi-asset-portfolio.md`](specs/phase-17-multi-asset-portfolio.md) | |
+| 18 | Production Monitoring | [`specs/phase-18-production-monitoring.md`](specs/phase-18-production-monitoring.md) | |
 
 ---
 
@@ -200,3 +206,119 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | Gap Between Periods | 10 days |
 | Max Evolution Iterations | 15 |
 | Max Code Repair Attempts | 10 |
+
+---
+
+## Phase 13: Program Database
+
+**Spec:** [`specs/phase-13-program-database.md`](specs/phase-13-program-database.md)
+
+**File:** `src/profit/program_db.py`
+
+AlphaEvolve-style program database with backend abstraction for strategy storage, lineage tracking, and inspiration sampling.
+
+- [ ] `ProgramDatabaseBackend` protocol
+- [ ] `JsonFileBackend` implementation (default)
+- [ ] `SqliteBackend` implementation
+- [ ] `ProgramDatabase` class with backend abstraction
+- [ ] Strategy registration and lineage tracking
+- [ ] Inspiration sampling (exploitation, exploration, trajectory, mixed)
+- [ ] `generate_improvement_with_inspirations()` in LLMClient
+- [ ] Migration script from `StrategyPersister`
+
+---
+
+## Phase 14: Diff-Based Mutations
+
+**Spec:** [`specs/phase-14-diff-based-mutations.md`](specs/phase-14-diff-based-mutations.md)
+
+**File:** `src/profit/diff_utils.py`
+
+Surgical code mutations using SEARCH/REPLACE diffs instead of full rewrites.
+
+- [ ] EVOLVE block markers in strategies
+- [ ] `extract_evolve_blocks()` parser
+- [ ] `parse_diff_response()` parser
+- [ ] `apply_diff()` function
+- [ ] `validate_modified_code()` function
+- [ ] `generate_diff()` method in LLMClient
+- [ ] Fallback to full rewrite on diff failure
+- [ ] Updated seed strategies with EVOLVE markers
+
+---
+
+## Phase 15: Multi-Metric Evaluation
+
+**Spec:** [`specs/phase-15-multi-metric-evaluation.md`](specs/phase-15-multi-metric-evaluation.md)
+
+**File:** `src/profit/evaluation.py`
+
+Multi-objective evaluation with fast rejection cascade.
+
+- [ ] `StrategyMetrics` dataclass (10+ metrics)
+- [ ] `MetricsCalculator` class
+- [ ] Evaluation cascade stages (syntax, smoke, single-fold, full WF)
+- [ ] `EvaluationCascade` class
+- [ ] Selection policies (WeightedSum, GatedMAS, Pareto)
+- [ ] CLI arguments for policies and thresholds
+
+---
+
+## Phase 16: Research & Data Agents
+
+**Spec:** [`specs/phase-16-research-data-agents.md`](specs/phase-16-research-data-agents.md)
+
+**Files:** `src/profit/agents/`, `src/profit/data/`, `src/profit/sources.py`
+
+Autonomous agents for strategy idea and data source discovery.
+
+- [ ] `ResearcherAgent` class with idea generation
+- [ ] `DataCollectorAgent` class with data provisioning
+- [ ] `IdeaCard` and `DataProposal` dataclasses
+- [ ] `SourceRegistry` with per-source `requires_review` attribute
+- [ ] `ConnectorRegistry` (Yahoo, FRED, AlphaVantage, CSV)
+- [ ] `ApprovalManager` for human-in-the-loop gates
+- [ ] CLI commands: `research`, `approve`, `reject`, `list-pending`, `trust-source`
+
+---
+
+## Phase 17: Multi-Asset & Portfolio
+
+**Spec:** [`specs/phase-17-multi-asset-portfolio.md`](specs/phase-17-multi-asset-portfolio.md)
+
+**Files:** `src/profit/universe.py`, `src/profit/portfolio.py`
+
+Multi-asset robustness testing and portfolio construction.
+
+### Phase 17A: Multi-Asset Robustness
+- [ ] `UniverseManifest` and `AssetConfig` classes
+- [ ] `CrossAssetMetrics` dataclass
+- [ ] `MultiAssetEvaluator` class
+- [ ] `evolve_strategy_multi_asset()` method
+- [ ] CLI `--universe` and `--multi-asset` arguments
+
+### Phase 17B: Portfolio Layer
+- [ ] `PortfolioStrategy` base class
+- [ ] `PortfolioConstraints` dataclass
+- [ ] `PortfolioSimulator` with turnover and costs
+- [ ] `PortfolioResult` dataclass
+- [ ] `evolve_portfolio_strategy()` method
+- [ ] CLI `--portfolio` argument
+
+---
+
+## Phase 18: Production Monitoring
+
+**Spec:** [`specs/phase-18-production-monitoring.md`](specs/phase-18-production-monitoring.md)
+
+**Files:** `src/profit/monitoring.py`, `src/profit/production.py`
+
+Continuous monitoring, drift detection, and champion/challenger rotation.
+
+- [ ] `StrategyMonitor` class with performance logging
+- [ ] `DriftReport` and drift detection algorithms
+- [ ] `ChampionChallenger` class for strategy rotation
+- [ ] `ProductionConfig` with YAML configuration
+- [ ] Re-evolution trigger workflow
+- [ ] CLI commands: `monitor`, `production`, `trigger-reevolution`
+- [ ] `scripts/run_monitoring.py` for scheduling
