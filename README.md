@@ -251,4 +251,13 @@ profit/
 
 ## License
 
-MIT
+This project is licensed under the **MIT License**. See the `LICENSE` file for details.
+
+## Contributing
+
+Contributions are welcome — issues and pull requests are appreciated.
+
+By submitting a contribution (including code, documentation, tests, or other materials) to this repository, you agree that your contribution will be licensed under the **MIT License**, and may be redistributed and modified under the same terms as the rest of the project.
+
+If you do not have the right to submit the work under the MIT License (for example, due to employer or third‑party restrictions), please do not contribute that material.
+
