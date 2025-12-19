@@ -1,6 +1,23 @@
-# ProFiT: LLM-Driven Evolutionary Trading System
+# StratGenesis
 
-ProFiT (Program Search for Financial Trading) is a framework for automated discovery and continual improvement of trading strategies using large language models (LLMs) within an evolutionary loop.
+StratGenesis is a research-oriented codebase for **evolving algorithmic trading strategies** using LLMs inside an automated evolutionary loop.
+
+This repository is an implementation that **combines ideas from two papers**:
+
+- **ProFiT — “Program Search for Financial Trading”** (LLM-driven evolutionary program search for trading strategies, with walk-forward validation):  
+  https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5889762  
+  (alt mirror: https://www.researchgate.net/publication/398248186_ProFiT_Program_Search_for_Financial_Trading)
+
+- **AlphaEvolve — “A coding agent for scientific and algorithmic discovery”** (iterative code improvement via evaluator feedback and evolutionary search):  
+  https://arxiv.org/abs/2506.13131  
+  (blog + pdf: https://deepmind.google/blog/alphaevolve-a-gemini-powered-coding-agent-for-designing-advanced-algorithms/)
+
+On top of these foundations, StratGenesis adds autonomous **Research** and **Data Collection** agents to support strategy idea discovery and dataset acquisition/curation for evaluation.
+
+> **AI-generated code notice:** This repository (architecture, implementation, and documentation) was produced end-to-end by **ChatGPT** and **Claude Code**. Treat it as experimental research software and review it carefully before relying on it.
+
+> ⚠️ **Security warning — run at your own risk:** StratGenesis can prompt LLMs to **generate/modify code** (e.g., strategy implementations and patches) and may **execute that generated code** as part of the evaluation loop.  
+> Only run it in an isolated environment (VM/container), keep secrets/credentials off the machine, and assume generated code may be incorrect, insecure, or harmful. You are responsible for any outcomes.
 
 ## Features
 
