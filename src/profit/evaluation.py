@@ -74,8 +74,11 @@ def load_strategy_class(
             "np": np,
         }
 
-    namespace = {}
-    exec(strategy_code, exec_globals, namespace)
+    # Single namespace for both globals and locals: with separate dicts,
+    # module-level imports/helpers would land in locals while methods
+    # resolve names against globals, making them invisible at runtime.
+    namespace = dict(exec_globals)
+    exec(strategy_code, namespace)
 
     if expected_class_name is not None:
         strategy_class = namespace.get(expected_class_name)

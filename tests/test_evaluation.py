@@ -88,6 +88,27 @@ class TestClass:
         pass
 '''
 
+# Strategy whose methods depend on module-level bindings (an import and a
+# helper function). Regression case: exec() with separate globals/locals
+# dicts put these in locals, so methods raised NameError at runtime.
+MODULE_LEVEL_BINDINGS_CODE = '''
+from backtesting.lib import crossover
+
+def _sma(values, n):
+    return pd.Series(values).rolling(n).mean()
+
+class CrossoverStrategy(Strategy):
+    def init(self):
+        self.fast = self.I(_sma, self.data.Close, 5)
+        self.slow = self.I(_sma, self.data.Close, 20)
+
+    def next(self):
+        if crossover(self.fast, self.slow):
+            self.buy()
+        elif crossover(self.slow, self.fast):
+            self.position.close()
+'''
+
 
 # ===========================================================================
 # Core Helper Tests
@@ -132,6 +153,26 @@ class TestLoadStrategyClass:
         """Should raise ValueError when the named class is not a Strategy."""
         with pytest.raises(ValueError, match="not a backtesting.Strategy subclass"):
             load_strategy_class(NON_STRATEGY_CODE, expected_class_name="TestClass")
+
+    def test_methods_see_module_level_bindings(self, small_data):
+        """Methods must resolve module-level imports and helpers at runtime."""
+        strategy_class = load_strategy_class(
+            MODULE_LEVEL_BINDINGS_CODE, expected_class_name="CrossoverStrategy"
+        )
+        # NameError ('crossover'/'_sma' not defined) surfaced only when the
+        # strategy actually ran, so exercise a full backtest.
+        result = run_bt(strategy_class, small_data)
+        assert isinstance(result, pd.Series)
+
+    def test_smoke_test_stage_with_module_level_bindings(self, small_data):
+        """SmokeTestStage should pass code that imports from backtesting.lib."""
+        stage = SmokeTestStage()
+        output = stage.evaluate(
+            MODULE_LEVEL_BINDINGS_CODE,
+            small_data,
+            expected_class_name="CrossoverStrategy",
+        )
+        assert output.result == StageResult.PASS, output.error
 
 
 class TestRunBt:
