@@ -21,7 +21,7 @@ On top of these foundations, StratGenesis adds autonomous **Research** and **Dat
 
 ## Features
 
-- **LLM-Guided Evolution**: Uses GPT-4 or Claude to suggest and implement strategy improvements
+- **LLM-Guided Evolution**: Uses OpenAI GPT or Anthropic Claude models to suggest and implement strategy improvements
 - **Diff-Based Mutations**: Surgical code changes via SEARCH/REPLACE diffs instead of full rewrites
 - **Walk-Forward Validation**: Robust out-of-sample testing across multiple time folds
 - **Technical Indicators**: 5 seed strategies using common technical indicators
@@ -104,7 +104,7 @@ See [docs/data-sources.md](docs/data-sources.md) for full documentation.
 | `--data` | Required | Path to OHLCV CSV file |
 | `--strategy` | EMACrossover | Seed strategy to evolve |
 | `--provider` | openai | Default LLM provider (openai/anthropic) |
-| `--model` | gpt-4 | Default LLM model name |
+| `--model` | (provider default) | Default LLM model (gpt-5.2 for openai, claude-sonnet-4-6 for anthropic) |
 | `--analyst-provider` | (from --provider) | LLM provider for analysis/improvements |
 | `--analyst-model` | (from --model) | LLM model for analysis/improvements |
 | `--coder-provider` | (from --provider) | LLM provider for code generation |
@@ -112,15 +112,19 @@ See [docs/data-sources.md](docs/data-sources.md) for full documentation.
 | `--folds` | 5 | Number of walk-forward folds |
 | `--capital` | 10000 | Initial capital |
 | `--commission` | 0.002 | Commission rate (0.2%) |
-| `--output-dir` | evolved_strategies | Directory to save evolved strategies |
+| `--output-dir` | (none) | **Deprecated** — legacy file persistence; the program database is the system of record |
 | `--db-backend` | json | Program database backend (json/sqlite) |
 | `--db-path` | program_db | Path for program database |
-| `--no-inspirations` | False | Disable inspiration sampling from database |
+| `--export-strategy` | (none) | Export a strategy from the program database to a .py file by ID |
+| `--export-dir` | exported_strategies | Directory for exported strategies |
+| `--no-inspirations` | False | Disable inspiration sampling only (the database always records strategies) |
 | `--no-diffs` | False | Disable diff-based mutations (use full rewrites) |
 | `--diff-mode` | adaptive | When to use diffs: always, never, or adaptive |
 | `--diff-match` | tolerant | Diff matching: strict (literal) or tolerant |
 | `--exploration-gens` | 5 | In adaptive mode, use rewrites for first N gens |
-| `--selection-policy` | (none) | Selection policy: weighted, gated, or pareto |
+| `--selection-policy` | gated | Selection policy: weighted, gated, or pareto |
+| `--skip-cascade` | False | Disable the evaluation cascade (direct backtest only) |
+| `--quick-eval` | False | Quick cascade mode (syntax + smoke test only) |
 | `--min-return` | 0.0 | Minimum annualized return threshold (gated policy) |
 | `--min-sharpe` | 0.0 | Minimum Sharpe ratio threshold (gated policy) |
 | `--max-drawdown` | -50.0 | Maximum drawdown threshold (gated policy) |
@@ -130,15 +134,30 @@ See [docs/data-sources.md](docs/data-sources.md) for full documentation.
 | `--gate-min-sharpe` | (none) | Promotion gate: minimum Sharpe ratio |
 | `--gate-min-win-rate` | (none) | Promotion gate: minimum win rate (%) |
 
+Legacy strategies saved by the deprecated `--output-dir` persistence (`evolved_strategies/run_*/`) can be migrated into the program database (dry-run by default, add `--apply` to perform):
+
+```bash
+uv run python scripts/migrate_to_program_db.py
+```
+
 ### Dual-Model Configuration
 
 Use different LLMs for analysis vs coding to optimize each role:
 
 ```bash
-# Use GPT-4 for analysis, Claude Sonnet for coding
+# Balanced: GPT-5.2 for analysis, Claude Sonnet for coding
 uv run python -m profit.main --data data/ES_daily.csv --strategy EMACrossover \
-    --analyst-provider openai --analyst-model gpt-4 \
-    --coder-provider anthropic --coder-model claude-sonnet-4-20250514
+    --analyst-provider openai --analyst-model gpt-5.2 \
+    --coder-provider anthropic --coder-model claude-sonnet-4-6
+
+# Best quality: Claude Opus for analysis, Claude Sonnet for coding
+uv run python -m profit.main --data data/ES_daily.csv --strategy EMACrossover \
+    --analyst-provider anthropic --analyst-model claude-opus-4-8 \
+    --coder-provider anthropic --coder-model claude-sonnet-4-6
+
+# Cost-effective: Claude Haiku for both roles
+uv run python -m profit.main --data data/ES_daily.csv --strategy EMACrossover \
+    --provider anthropic --model claude-haiku-4-5
 ```
 
 ### Diff-Based Mutations
@@ -172,8 +191,11 @@ ProFiT uses a two-stage evaluation process:
    - Syntax check (~1ms) - Parse and compile code
    - Smoke test (~1s) - Quick backtest on 3 months of data
    - Single-fold evaluation (~10s) - Full backtest + **promotion gate**
+   - Full walk-forward (~1min) - Evaluation across all walk-forward folds
 
 2. **Selection Policy** - Multi-objective acceptance for strategies that pass the cascade
+
+By default, every candidate runs through the full 4-stage cascade and is accepted by the **gated** selection policy. Use `--quick-eval` for a faster cascade (syntax + smoke test only) or `--skip-cascade` to disable it entirely.
 
 The **promotion gate** (`--gate-*` arguments) filters out junk strategies early, before the selection policy runs. This saves compute and prevents strategies with 0 trades or extreme drawdowns from polluting the population.
 

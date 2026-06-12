@@ -2244,3 +2244,163 @@ class TestBehaviorDescriptorCells:
         assert r1.behavior_descriptor["win_bin"] == 0
         assert r2.behavior_descriptor["win_bin"] == 1
         assert r3.behavior_descriptor["win_bin"] == 2
+
+
+class TestSchemaExtensions:
+    """Round-trip and backward-compat tests for extended StrategyRecord fields.
+
+    Covers the Phase 15 cascade_result annotation, the Phase 16/17
+    future-proofing fields, and the val_return/test_return/repair_attempts
+    columns previously dropped by the sqlite backend.
+    """
+
+    @pytest.fixture(params=["json", "sqlite"])
+    def backend(self, request, tmp_path):
+        if request.param == "json":
+            return JsonFileBackend(str(tmp_path / "db"))
+        return SqliteBackend(str(tmp_path / "db.sqlite"))
+
+    @staticmethod
+    def _full_record():
+        return StrategyRecord(
+            code="class Test: pass",
+            class_name="Test",
+            metrics={"ann_return": 10.0},
+            val_return=12.5,
+            test_return=8.0,
+            repair_attempts=3,
+            cascade_result={"passed": True, "final_stage": "full_walkforward"},
+            data_requirements=["vix_daily"],
+            data_source_status="available",
+            research_sources=["arxiv:1234.5678"],
+            universe_id="us_etfs",
+            portfolio_metrics={"turnover": 0.4},
+        )
+
+    def test_round_trip_extended_fields(self, backend):
+        """All extended fields should survive a save/load cycle on both backends."""
+        sid = backend.save(self._full_record())
+        loaded = backend.load(sid)
+
+        assert loaded.val_return == 12.5
+        assert loaded.test_return == 8.0
+        assert loaded.repair_attempts == 3
+        assert loaded.cascade_result == {
+            "passed": True,
+            "final_stage": "full_walkforward",
+        }
+        assert loaded.data_requirements == ["vix_daily"]
+        assert loaded.data_source_status == "available"
+        assert loaded.research_sources == ["arxiv:1234.5678"]
+        assert loaded.universe_id == "us_etfs"
+        assert loaded.portfolio_metrics == {"turnover": 0.4}
+
+    def test_default_extended_fields(self, backend):
+        """Records saved without extended values should load with defaults."""
+        sid = backend.save(StrategyRecord(code="x", class_name="X"))
+        loaded = backend.load(sid)
+
+        assert loaded.cascade_result == {}
+        assert loaded.data_requirements == []
+        assert loaded.data_source_status == ""
+        assert loaded.research_sources == []
+        assert loaded.universe_id is None
+        assert loaded.portfolio_metrics == {}
+
+    def test_json_loads_legacy_record(self, tmp_path):
+        """JSON records written before the new fields existed should still load."""
+        import json
+
+        backend = JsonFileBackend(str(tmp_path / "db"))
+        sid = backend.save(StrategyRecord(code="x", class_name="X"))
+
+        record_path = Path(backend.strategies_dir) / f"{sid}.json"
+        data = json.loads(record_path.read_text())
+        for key in (
+            "cascade_result",
+            "data_requirements",
+            "data_source_status",
+            "research_sources",
+            "universe_id",
+            "portfolio_metrics",
+        ):
+            data.pop(key, None)
+        record_path.write_text(json.dumps(data))
+
+        loaded = backend.load(sid)
+        assert loaded is not None
+        assert loaded.cascade_result == {}
+        assert loaded.universe_id is None
+
+    def test_sqlite_migrates_old_schema(self, tmp_path):
+        """Opening a pre-extension sqlite DB should add the missing columns."""
+        import sqlite3
+
+        db_path = tmp_path / "old.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE strategies (
+                id TEXT PRIMARY KEY,
+                code TEXT NOT NULL,
+                class_name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'accepted',
+                mutation_text TEXT,
+                generation INTEGER DEFAULT 0,
+                fold INTEGER,
+                asset TEXT,
+                eval_context_id TEXT,
+                improvement_delta REAL DEFAULT 0.0,
+                next_method_excerpt TEXT,
+                diff_from_parent TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        backend = SqliteBackend(str(db_path))
+        sid = backend.save(self._full_record())
+        loaded = backend.load(sid)
+
+        assert loaded.val_return == 12.5
+        assert loaded.cascade_result["passed"] is True
+        assert loaded.universe_id == "us_etfs"
+
+    def test_sqlite_update_test_metrics(self, tmp_path):
+        """update_test_metrics should persist on the sqlite backend.
+
+        Regression: the old sqlite schema silently dropped test_return.
+        """
+        db = ProgramDatabase(backend=SqliteBackend(str(tmp_path / "db.sqlite")))
+        sid = db.register_strategy(
+            code="class Test: pass",
+            class_name="Test",
+            parent_ids=[],
+            mutation_text="seed",
+            metrics={"ann_return": 5.0},
+            tags=[],
+            val_return=5.0,
+        )
+
+        assert db.update_test_metrics(sid, 7.5) is True
+        assert db.get_strategy(sid).test_return == 7.5
+
+    def test_register_strategy_cascade_result(self, tmp_path):
+        """register_strategy should store the cascade_result annotation."""
+        db = ProgramDatabase(backend=JsonFileBackend(str(tmp_path / "db")))
+        sid = db.register_strategy(
+            code="class Test: pass",
+            class_name="Test",
+            parent_ids=[],
+            mutation_text="seed",
+            metrics={},
+            tags=[],
+            cascade_result={"passed": False, "final_stage": "smoke_test"},
+        )
+
+        assert db.get_strategy(sid).cascade_result == {
+            "passed": False,
+            "final_stage": "smoke_test",
+        }

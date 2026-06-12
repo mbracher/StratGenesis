@@ -12,7 +12,12 @@ uv run python -m profit.main --data data/ES_hourly.csv
 uv run python -m profit.main --data data/ES_hourly.csv --strategy MACDStrategy
 
 # Use Anthropic Claude
-uv run python -m profit.main --data data/ES_hourly.csv --provider anthropic --model claude-3-opus
+uv run python -m profit.main --data data/ES_hourly.csv --provider anthropic --model claude-sonnet-4-6
+
+# Split roles: stronger model for analysis, default for code generation
+uv run python -m profit.main --data data/ES_hourly.csv \
+    --analyst-provider anthropic --analyst-model claude-opus-4-8 \
+    --coder-provider anthropic --coder-model claude-sonnet-4-6
 
 # Custom configuration
 uv run python -m profit.main \
@@ -21,6 +26,24 @@ uv run python -m profit.main \
     --folds 3 \
     --capital 50000 \
     --commission 0.001
+
+# Pareto multi-objective selection
+uv run python -m profit.main --data data/ES_hourly.csv --selection-policy pareto
+
+# Quick iteration (syntax check + smoke test only)
+uv run python -m profit.main --data data/ES_hourly.csv --quick-eval
+
+# Disable the evaluation cascade entirely
+uv run python -m profit.main --data data/ES_hourly.csv --skip-cascade
+
+# Use the sqlite program database backend
+uv run python -m profit.main --data data/ES_hourly.csv --db-backend sqlite
+
+# Export a strategy from the program database by ID
+uv run python -m profit.main --export-strategy <ID>
+
+# Migrate legacy evolved_strategies/ runs into the program database
+uv run python scripts/migrate_to_program_db.py --apply
 ```
 
 ### Using the Python API
@@ -35,7 +58,7 @@ import pandas as pd
 data = pd.read_csv("data/ES_hourly.csv", parse_dates=True, index_col=0)
 
 # Initialize
-llm = LLMClient(provider="openai", model="gpt-4")
+llm = LLMClient(provider="openai", model="gpt-5.2")
 evolver = ProfitEvolver(llm)
 
 # Run evolution
@@ -123,7 +146,7 @@ class MyCustomStrategy(Strategy):
         # Trading logic
         pass
 
-llm = LLMClient(provider="openai", model="gpt-4")
+llm = LLMClient(provider="openai", model="gpt-5.2")
 evolver = ProfitEvolver(llm)
 results = evolver.walk_forward_optimize(data, MyCustomStrategy)
 ```
@@ -131,9 +154,17 @@ results = evolver.walk_forward_optimize(data, MyCustomStrategy)
 ### Accessing Evolved Strategy Code
 
 ```python
-# After evolution, get the best strategy code
+# walk_forward_optimize returns a list of per-fold result dicts
 results = evolver.walk_forward_optimize(data, EMACrossover)
-for fold_result in results['fold_results']:
-    print(f"Fold {fold_result['fold']}: Best strategy code")
-    print(fold_result['best_strategy_code'])
+for fold_result in results:
+    strategy = fold_result["strategy"]
+    print(f"Fold {fold_result['fold']}: {strategy.__name__} "
+          f"({fold_result['ann_return']:.2f}% ann. return)")
+```
+
+Strategy source code lives in the program database. Look up the DB id
+printed during the run (or shown in the results summary) and export it:
+
+```bash
+uv run python -m profit.main --export-strategy <ID>
 ```

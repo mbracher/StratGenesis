@@ -1095,3 +1095,15 @@ class TestValidateModifiedCode:
 - [ ] CLI `--no-diffs` argument
 - [ ] `add_evolve_markers.py` utility script
 - [ ] Tests for all diff utilities
+
+---
+
+## Implementation Notes
+
+- `DiffBlock` preserves raw whitespace instead of stripping in `__post_init__`: exact SEARCH
+  matching in strict mode requires the original text, and normalization happens at match time
+  in tolerant mode (enforced by test).
+- `add_evolve_markers` ships as the AST-based `scripts/add_evolve_markers.py` rather than a
+  regex function in `diff_utils` (more reliable).
+- The `ta` technical-analysis library is allowlisted in `ALLOWED_IMPORTS`, so evolved
+  strategies may import it.

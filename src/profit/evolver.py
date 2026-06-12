@@ -32,7 +32,7 @@ from profit.strategies import (
 )
 
 if TYPE_CHECKING:
-    from profit.program_db import ProgramDatabase
+    from profit.program_db import EvaluationContext, ProgramDatabase
     from profit.evaluation import (
         EvaluationCascade,
         SelectionPolicy,
@@ -360,6 +360,21 @@ class ProfitEvolver:
         self.exploration_gens = exploration_gens
         self._consecutive_diff_failures = 0
 
+        # Phase 15: cascade annotation for the strategy registered this generation
+        self._last_cascade_result: Optional[Dict] = None
+
+    def _store_cascade_result(
+        self, generation: int, fold: int, code: str, result: "CascadeResult"
+    ) -> None:
+        """Stash a cascade result for annotation on the next registered strategy.
+
+        Generation and fold are already first-class StrategyRecord fields, so
+        only the serialized cascade outcome needs to travel with the record.
+        """
+        if not self.program_db:
+            return
+        self._last_cascade_result = result.to_dict()
+
     def run_backtest(self, strategy_class, data: pd.DataFrame) -> tuple[dict, pd.Series]:
         """Run a backtest on given data with specified strategy class.
 
@@ -464,6 +479,8 @@ class ProfitEvolver:
         selection_policy: Optional["SelectionPolicy"] = None,
         cascade: Optional["EvaluationCascade"] = None,
         use_inspirations: bool = True,
+        eval_context: Optional["EvaluationContext"] = None,
+        folds: Optional[List[Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]]] = None,
     ):
         """Evolve a strategy using LLM-guided mutations.
 
@@ -484,6 +501,11 @@ class ProfitEvolver:
             cascade: Optional EvaluationCascade for staged evaluation.
                 If None, uses direct backtest evaluation.
             use_inspirations: If True and program_db available, use inspiration sampling.
+            eval_context: EvaluationContext recorded with every registered strategy
+                and used to filter inspiration sampling (Phase 13B).
+            folds: All walk-forward (train, val, test) splits, passed through to
+                the cascade's FullWalkForwardStage. Without folds, a cascade that
+                contains a full_walkforward stage stops after single_fold.
 
         Returns:
             Tuple of (best_strategy_class, best_perf, best_code) where:
@@ -505,15 +527,45 @@ class ProfitEvolver:
         # Get source code of the seed strategy
         seed_code = inspect.getsource(strategy_class)
 
+        # A cascade with a full_walkforward stage needs folds; without them,
+        # stop after single_fold so candidates aren't failed on a missing input
+        stop_stage = None
+        if cascade is not None and not folds:
+            if any(stage.name == "full_walkforward" for stage in cascade.stages):
+                stop_stage = "single_fold"
+
         # Phase 15: Compute full StrategyMetrics if using selection policy
         baseline_metrics: Optional["StrategyMetrics"] = None
         population_metrics: List["StrategyMetrics"] = []
+        seed_cascade_dict: Optional[dict] = None
 
         if selection_policy is not None:
             from profit.evaluation import MetricsCalculator
 
             metrics_calc = MetricsCalculator()
             baseline_metrics = metrics_calc.compute_all(base_result)
+
+            # Evaluate the seed through the same cascade as candidates so the
+            # policy compares aggregate metrics with aggregate metrics
+            if cascade is not None:
+                seed_cascade = cascade.evaluate(
+                    seed_code,
+                    val_data,
+                    stop_at_stage=stop_stage,
+                    folds=folds,
+                    expected_class_name=strategy_class.__name__,
+                )
+                seed_cascade_dict = seed_cascade.to_dict()
+                if seed_cascade.passed and seed_cascade.metrics is not None:
+                    baseline_metrics = seed_cascade.metrics
+                elif not seed_cascade.passed:
+                    print(
+                        "Warning: seed strategy did not pass the evaluation "
+                        "cascade; using direct-backtest baseline metrics."
+                    )
+                # passed but no metrics (e.g. quick cascade): silently keep
+                # the direct-backtest baseline, candidates fall back the same way
+
             population_metrics = [baseline_metrics]
             print(
                 f"Baseline metrics: Return={baseline_metrics.ann_return:.2f}%, "
@@ -544,8 +596,10 @@ class ProfitEvolver:
                 status=StrategyStatus.SEED,
                 generation=0,
                 fold=fold,
+                eval_context=eval_context,
                 val_return=P0,
                 repair_attempts=0,
+                cascade_result=seed_cascade_dict,
             )
             # CRITICAL: Track the DB ID for this class
             self._strategy_db_ids[strategy_class.__name__] = seed_id
@@ -567,6 +621,9 @@ class ProfitEvolver:
                 "Selecting a strategy to mutate..."
             )
 
+            # Reset the per-generation cascade annotation
+            self._last_cascade_result = None
+
             # 5. Select a strategy from population (random selection for diversity)
             parent_class, parent_perf, parent_code = population[self._random_index(len(population))]
             print(
@@ -574,10 +631,41 @@ class ProfitEvolver:
                 f"return {parent_perf:.2f}% for mutation."
             )
 
-            # 6. Prompt LLM A for improvement proposal
-            improvement = self.llm.generate_improvement(
-                parent_code, f"AnnReturn={parent_perf:.2f}%"
+            # Get parent's DB ID (not class name!)
+            parent_db_id = getattr(parent_class, "_db_id", None) or self._strategy_db_ids.get(
+                parent_class.__name__
             )
+
+            # 6. Prompt LLM A for improvement proposal
+            # Phase 13: enrich the prompt with inspirations sampled from the
+            # program database (excluding the parent itself)
+            metrics_summary = f"AnnReturn={parent_perf:.2f}%"
+            inspirations = []
+            if use_inspirations and self.program_db and parent_db_id:
+                try:
+                    inspirations = self.program_db.sample_inspirations(
+                        n=3,
+                        mode="mixed",
+                        exclude_ids=[parent_db_id],
+                        eval_context_id=(
+                            eval_context.context_id() if eval_context else None
+                        ),
+                    )
+                except Exception as e:
+                    # Inspirations are optional prompt enrichment - a DB read
+                    # failure must not abort a multi-fold run
+                    print(f"Warning: inspiration sampling failed ({e}); continuing without")
+                    inspirations = []
+
+            if inspirations:
+                print(f"Sampled {len(inspirations)} inspiration(s) from program DB")
+                improvement = self.llm.generate_improvement_with_inspirations(
+                    parent_code, metrics_summary, inspirations
+                )
+            else:
+                improvement = self.llm.generate_improvement(
+                    parent_code, metrics_summary
+                )
             print(f"LLM suggested improvement: {improvement}")
 
             # 7. Prompt LLM B to synthesize modified strategy code
@@ -603,14 +691,16 @@ class ProfitEvolver:
             # Give the new strategy a unique name by generation
             new_class_name = self._build_strategy_name(parent_class.__name__, gen)
 
-            # Replace class name in code to avoid collisions
+            # Replace class name in code to avoid collisions. Check the full
+            # parent name first: replacing the bare base name would corrupt
+            # chained names (EMACrossover_3 -> EMACrossover_5_3_3 instead of
+            # EMACrossover_5_3) because the base is a substring of the parent.
             if isinstance(new_code, str) and new_code.startswith("class"):
-                # Extract original class name from parent (base name for replacement)
                 original_class = parent_class.__name__.split("_")[0]
-                if original_class in new_code:
-                    new_code = new_code.replace(original_class, new_class_name, 1)
-                else:
+                if parent_class.__name__ in new_code:
                     new_code = new_code.replace(parent_class.__name__, new_class_name, 1)
+                elif original_class in new_code:
+                    new_code = new_code.replace(original_class, new_class_name, 1)
 
             # 8-11. Try to compile and backtest with repair loop
             # Phase 15: Use cascade if provided for staged evaluation with promotion gate
@@ -619,20 +709,31 @@ class ProfitEvolver:
             res = None
             repair_count = 0  # Track number of repair attempts
             gate_rejected = False  # Track if rejected by promotion gate (no retry)
+            candidate_cascade: Optional["CascadeResult"] = None
 
             for attempt in range(1, 11):  # up to 10 repair attempts
                 try:
                     if cascade is not None:
                         # Use cascade for staged evaluation with promotion gate
-                        from profit.evaluation import StageResult
+                        from profit.evaluation import StageResult, load_strategy_class
 
-                        cascade_result = cascade.evaluate(new_code, val_data)
+                        cascade_result = cascade.evaluate(
+                            new_code,
+                            val_data,
+                            stop_at_stage=stop_stage,
+                            folds=folds,
+                            expected_class_name=new_class_name,
+                        )
+                        candidate_cascade = cascade_result
+                        self._store_cascade_result(gen, fold, new_code, cascade_result)
 
                         if cascade_result.passed:
                             # All stages passed - load strategy and get full result
-                            namespace = {}
-                            exec(new_code, exec_globals, namespace)
-                            NewStrategyClass = namespace[new_class_name]
+                            NewStrategyClass = load_strategy_class(
+                                new_code,
+                                exec_globals=exec_globals,
+                                expected_class_name=new_class_name,
+                            )
                             _, res = self.run_backtest(NewStrategyClass, val_data)
                             success = True
                             break
@@ -644,9 +745,11 @@ class ProfitEvolver:
                                 and "Promotion gate failed" in single_fold_output.error):
                                 # Gate rejection - code is valid, just didn't meet thresholds
                                 # Load strategy to get metrics for logging
-                                namespace = {}
-                                exec(new_code, exec_globals, namespace)
-                                NewStrategyClass = namespace[new_class_name]
+                                NewStrategyClass = load_strategy_class(
+                                    new_code,
+                                    exec_globals=exec_globals,
+                                    expected_class_name=new_class_name,
+                                )
                                 _, res = self.run_backtest(NewStrategyClass, val_data)
                                 gate_rejected = True
                                 print(f"  {single_fold_output.error}")
@@ -660,9 +763,13 @@ class ProfitEvolver:
                                 raise RuntimeError(error_text)
                     else:
                         # Original flow without cascade
-                        namespace = {}
-                        exec(new_code, exec_globals, namespace)
-                        NewStrategyClass = namespace[new_class_name]
+                        from profit.evaluation import load_strategy_class
+
+                        NewStrategyClass = load_strategy_class(
+                            new_code,
+                            exec_globals=exec_globals,
+                            expected_class_name=new_class_name,
+                        )
 
                         # Run backtest on validation data to get performance
                         _, res = self.run_backtest(NewStrategyClass, val_data)
@@ -686,11 +793,6 @@ class ProfitEvolver:
                     else:
                         print("Max repair attempts reached. Discarding this mutation.")
 
-            # Get parent's DB ID (not class name!)
-            parent_db_id = getattr(parent_class, "_db_id", None) or self._strategy_db_ids.get(
-                parent_class.__name__
-            )
-
             if not success and not gate_rejected:
                 # Code failed to compile/run - register as compile failed
                 if self.program_db:
@@ -706,9 +808,11 @@ class ProfitEvolver:
                         status=StrategyStatus.COMPILE_FAILED,
                         generation=gen,
                         fold=fold,
+                        eval_context=eval_context,
                         diff_from_parent=diff_text or "",
                         val_return=None,
                         repair_attempts=repair_count,
+                        cascade_result=self._last_cascade_result,
                     )
                     self._strategy_db_ids[new_class_name] = failed_id
                     print(f"[{failed_id}] Failed: {new_class_name} ({repair_count} repair attempts)")
@@ -743,10 +847,12 @@ class ProfitEvolver:
                         status=StrategyStatus.REJECTED,
                         generation=gen,
                         fold=fold,
+                        eval_context=eval_context,
                         improvement_delta=P_new - parent_perf,
                         diff_from_parent=diff_text or "",
                         val_return=P_new,
                         repair_attempts=repair_count,
+                        cascade_result=self._last_cascade_result,
                     )
                     self._strategy_db_ids[new_class_name] = rejected_id
                     repairs_str = f", {repair_count} repairs" if repair_count > 0 else ""
@@ -764,13 +870,22 @@ class ProfitEvolver:
             # Prepare metrics for registration (extract all standard metrics)
             new_metrics = self._extract_standard_metrics(res)
 
-            # Phase 15: Compute full StrategyMetrics if using selection policy
+            # Phase 15: Compute full StrategyMetrics if using selection policy.
+            # Prefer the cascade's aggregate metrics (cross-fold when stage 4
+            # ran) so the policy sees the same metric basis as the baseline.
             new_strategy_metrics: Optional["StrategyMetrics"] = None
             if selection_policy is not None:
-                from profit.evaluation import MetricsCalculator
+                if (
+                    candidate_cascade is not None
+                    and candidate_cascade.passed
+                    and candidate_cascade.metrics is not None
+                ):
+                    new_strategy_metrics = candidate_cascade.metrics
+                else:
+                    from profit.evaluation import MetricsCalculator
 
-                metrics_calc = MetricsCalculator()
-                new_strategy_metrics = metrics_calc.compute_all(res)
+                    metrics_calc = MetricsCalculator()
+                    new_strategy_metrics = metrics_calc.compute_all(res)
                 print(
                     f"  Metrics: Sharpe={new_strategy_metrics.sharpe:.2f}, "
                     f"MaxDD={new_strategy_metrics.max_drawdown:.2f}%, "
@@ -823,10 +938,12 @@ class ProfitEvolver:
                         status=StrategyStatus.ACCEPTED,
                         generation=gen,
                         fold=fold,
+                        eval_context=eval_context,
                         improvement_delta=P_new - parent_perf,
                         diff_from_parent=diff_text or "",
                         val_return=P_new,
                         repair_attempts=repair_count,
+                        cascade_result=self._last_cascade_result,
                     )
                     # CRITICAL: Track DB ID for accepted strategies
                     self._strategy_db_ids[new_class_name] = child_id
@@ -888,10 +1005,12 @@ class ProfitEvolver:
                         status=StrategyStatus.REJECTED,
                         generation=gen,
                         fold=fold,
+                        eval_context=eval_context,
                         improvement_delta=P_new - parent_perf,
                         diff_from_parent=diff_text or "",
                         val_return=P_new,
                         repair_attempts=repair_count,
+                        cascade_result=self._last_cascade_result,
                     )
                     self._strategy_db_ids[new_class_name] = rejected_id
                     repairs_str = f", {repair_count} repairs" if repair_count > 0 else ""
@@ -920,6 +1039,9 @@ class ProfitEvolver:
         selection_policy: Optional["SelectionPolicy"] = None,
         cascade: Optional["EvaluationCascade"] = None,
         use_inspirations: bool = True,
+        dataset_id: str = "",
+        dataset_source: str = "",
+        timeframe: str = "",
     ) -> list[dict]:
         """Perform walk-forward optimization across multiple folds.
 
@@ -935,6 +1057,10 @@ class ProfitEvolver:
             selection_policy: Optional SelectionPolicy for multi-metric acceptance.
             cascade: Optional EvaluationCascade for staged evaluation.
             use_inspirations: If True and program_db available, use inspiration sampling.
+            dataset_id: Identifier for the dataset (e.g. CSV file stem), recorded
+                in each fold's EvaluationContext (Phase 13B).
+            dataset_source: Where the data came from (e.g. "csv", "yahoo").
+            timeframe: Bar frequency (e.g. "1D", "1H").
 
         Returns:
             List of per-fold result dictionaries containing:
@@ -966,7 +1092,28 @@ class ProfitEvolver:
             print(f"Validation period: {val.index[0]} to {val.index[-1]}")
             print(f"Test period: {test.index[0]} to {test.index[-1]}")
 
-            # Evolve strategy on this fold's data
+            # Phase 13B: record the evaluation context so strategies from this
+            # fold are only compared/sampled against like-for-like evaluations
+            from profit.program_db import EvaluationContext
+
+            eval_context = EvaluationContext(
+                dataset_id=dataset_id,
+                dataset_source=dataset_source,
+                timeframe=timeframe,
+                train_start=str(train.index[0]),
+                train_end=str(train.index[-1]),
+                val_start=str(val.index[0]),
+                val_end=str(val.index[-1]),
+                test_start=str(test.index[0]),
+                test_end=str(test.index[-1]),
+                initial_capital=self.initial_capital,
+                commission=self.commission,
+            )
+
+            # Evolve strategy on this fold's data. Only folds up to and
+            # including the current one are threaded into the cascade:
+            # later folds' validation windows lie after this fold's test
+            # period, and selecting on them would be look-ahead bias.
             best_strat, _, best_code = self.evolve_strategy(
                 strategy_class,
                 train,
@@ -975,6 +1122,8 @@ class ProfitEvolver:
                 selection_policy=selection_policy,
                 cascade=cascade,
                 use_inspirations=use_inspirations,
+                eval_context=eval_context,
+                folds=folds[:i],
             )
 
             # Evaluate best strategy on test set

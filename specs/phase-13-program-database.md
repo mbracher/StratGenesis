@@ -1907,3 +1907,18 @@ class TestProgramDatabase:
 | JSON index not append-only | Added `_append_to_index()` for new entries, `_rebuild_index()` for updates |
 | JSON writes not atomic | Added `_atomic_write()` using temp file + rename |
 | SQLite parent_ids as JSON | Created `strategy_parents` join table with proper indexing |
+
+---
+
+## Implementation Notes
+
+Implemented as specced, with these adjustments:
+
+- On the inspirations path, the `metrics_summary` passed to the analyst is `"AnnReturn=X%"`
+  only (no Sharpe) — the population archive tracks annualized return; inspiration records
+  carry full metric summaries inside the prompt.
+- `StrategyRecord` additionally gained `val_return`, `test_return`, and `repair_attempts`
+  (Phase 15 overfitting detection) and a `cascade_result` annotation.
+- The CLI constructs the program database unconditionally (default: json backend at
+  `./program_db`); `--no-inspirations` disables inspiration sampling only — all strategies
+  are still recorded.

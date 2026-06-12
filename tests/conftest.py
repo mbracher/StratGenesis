@@ -45,3 +45,31 @@ def small_data(sample_data):
 def medium_data(sample_data):
     """Medium subset for tests requiring more data."""
     return sample_data.iloc[:2000]
+
+
+@pytest.fixture
+def wf_data():
+    """Daily OHLCV data long enough for one walk-forward fold.
+
+    prepare_folds needs ~3.5 years per fold (2.5y train + 6mo val + 6mo
+    test); sample_data's 5000 hourly bars span only ~7 months, so this
+    fixture provides ~4.25 years of daily bars instead.
+    """
+    np.random.seed(7)
+    n_bars = 1550
+
+    dates = pd.date_range(start="2020-01-01", periods=n_bars, freq="D")
+
+    returns = np.random.randn(n_bars) * 0.01
+    close = 100 * np.exp(np.cumsum(returns))
+
+    return pd.DataFrame(
+        {
+            "Open": close * (1 + np.random.randn(n_bars) * 0.001),
+            "High": close * (1 + np.abs(np.random.randn(n_bars) * 0.002)),
+            "Low": close * (1 - np.abs(np.random.randn(n_bars) * 0.002)),
+            "Close": close,
+            "Volume": np.random.randint(1000, 10000, n_bars),
+        },
+        index=dates,
+    )

@@ -129,6 +129,7 @@ ALLOWED_IMPORTS = {
     "collections",
     "typing",
     "dataclasses",
+    "ta",
 }
 
 

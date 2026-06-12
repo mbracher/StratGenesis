@@ -23,6 +23,7 @@ from profit.evaluation import (
     run_bt,
     evaluate_on_data,
     code_hash,
+    _clip_metric,
     # Cache
     CacheKey,
     EvaluationCache,
@@ -111,6 +112,26 @@ class TestLoadStrategyClass:
         """Should raise ValueError if no Strategy subclass found."""
         with pytest.raises(ValueError, match="No valid Strategy subclass"):
             load_strategy_class(NON_STRATEGY_CODE)
+
+    def test_expected_class_name_found(self):
+        """Should return the named class when expected_class_name is given."""
+        strategy_class = load_strategy_class(
+            VALID_STRATEGY_CODE, expected_class_name="TestStrategy"
+        )
+        assert strategy_class.__name__ == "TestStrategy"
+        assert issubclass(strategy_class, Strategy)
+
+    def test_expected_class_name_missing(self):
+        """Should raise ValueError when the named class does not exist."""
+        with pytest.raises(ValueError, match="'OtherStrategy' not found"):
+            load_strategy_class(
+                VALID_STRATEGY_CODE, expected_class_name="OtherStrategy"
+            )
+
+    def test_expected_class_name_not_a_strategy(self):
+        """Should raise ValueError when the named class is not a Strategy."""
+        with pytest.raises(ValueError, match="not a backtesting.Strategy subclass"):
+            load_strategy_class(NON_STRATEGY_CODE, expected_class_name="TestClass")
 
 
 class TestRunBt:
@@ -275,11 +296,38 @@ class TestMetricsCalculator:
         # Stability is std dev
         assert agg.stability > 0
 
-    def test_metric_capping(self):
-        """Should cap infinite values."""
-        # Sortino with no negative returns should be capped
-        metrics = StrategyMetrics(sortino=METRIC_CAPS["sortino"])
-        assert metrics.sortino == METRIC_CAPS["sortino"]
+    def test_clip_metric_caps_infinities(self):
+        """_clip_metric should cap infinite values at the configured limits."""
+        assert _clip_metric(float("inf"), "sortino") == METRIC_CAPS["sortino"]
+        assert _clip_metric(float("-inf"), "sortino") == -METRIC_CAPS["sortino"]
+        assert _clip_metric(float("inf"), "profit_factor") == METRIC_CAPS["profit_factor"]
+        # Unknown metrics fall back to the default cap of 100
+        assert _clip_metric(float("inf"), "unknown_metric") == 100.0
+        # Finite values pass through untouched; NaN is not an infinity
+        assert _clip_metric(1.23, "sortino") == 1.23
+        assert math.isnan(_clip_metric(float("nan"), "sortino"))
+
+    def test_sortino_capped_when_no_negative_returns(self):
+        """A monotonically rising equity curve hits the Sortino cap."""
+        calc = MetricsCalculator()
+        equity = pd.DataFrame({"Equity": [100.0, 101.0, 102.0, 103.0]})
+
+        assert calc._compute_sortino(equity, ann_return=10.0) == METRIC_CAPS["sortino"]
+        # No downside but no positive return either: not capped
+        assert calc._compute_sortino(equity, ann_return=-5.0) == 0.0
+
+    def test_profit_factor_capped_when_no_losses(self):
+        """All-winning trade tables hit the profit-factor cap."""
+        calc = MetricsCalculator()
+
+        winners_only = pd.DataFrame({"PnL": [10.0, 5.0]})
+        assert (
+            calc._compute_profit_factor(winners_only)
+            == METRIC_CAPS["profit_factor"]
+        )
+
+        mixed = pd.DataFrame({"PnL": [10.0, -5.0]})
+        assert calc._compute_profit_factor(mixed) == pytest.approx(2.0)
 
 
 # ===========================================================================
@@ -349,6 +397,69 @@ class TestSingleFoldStage:
         assert result.result == StageResult.FAIL
         assert "Promotion gate failed" in result.error
         assert "Too few trades" in result.error
+
+
+class TestFullWalkForwardStage:
+    """Tests for FullWalkForwardStage."""
+
+    @staticmethod
+    def _folds(data):
+        return [
+            (data.iloc[:800], data.iloc[800:1200], data.iloc[1200:1600]),
+            (data.iloc[400:1200], data.iloc[1200:1600], data.iloc[1600:2000]),
+        ]
+
+    def test_pass_with_folds(self, medium_data):
+        """Should evaluate each fold's validation slice and aggregate."""
+        stage = FullWalkForwardStage()
+        result = stage.evaluate(
+            VALID_STRATEGY_CODE, medium_data, folds=self._folds(medium_data)
+        )
+
+        assert result.result == StageResult.PASS
+        assert isinstance(result.metrics, StrategyMetrics)
+        # Aggregates carry the cross-fold robustness metrics
+        assert result.metrics.consistency is not None
+        assert result.metrics.worst_fold_return is not None
+
+    def test_fail_without_folds(self, medium_data):
+        """Should fail when folds are missing or empty."""
+        stage = FullWalkForwardStage()
+
+        for folds in (None, []):
+            result = stage.evaluate(VALID_STRATEGY_CODE, medium_data, folds=folds)
+            assert result.result == StageResult.FAIL
+            assert "requires folds" in result.error
+
+    def test_fail_broken_strategy(self, medium_data):
+        """Should fail (not raise) on code without a Strategy subclass."""
+        stage = FullWalkForwardStage()
+        result = stage.evaluate(
+            NON_STRATEGY_CODE, medium_data, folds=self._folds(medium_data)
+        )
+
+        assert result.result == StageResult.FAIL
+        assert result.error
+
+    def test_full_cascade_reaches_stage_four(self, medium_data):
+        """A full cascade with folds should finish at full_walkforward."""
+        cascade = create_cascade(
+            mode="full",
+            promotion_gate=PromotionGate(min_trades=0),
+            verbose=False,
+        )
+        result = cascade.evaluate(
+            VALID_STRATEGY_CODE, medium_data, folds=self._folds(medium_data)
+        )
+
+        assert result.passed is True
+        assert result.final_stage == "full_walkforward"
+        assert set(result.stage_results) == {
+            "syntax_check",
+            "smoke_test",
+            "single_fold",
+            "full_walkforward",
+        }
 
 
 class TestPromotionGate:
