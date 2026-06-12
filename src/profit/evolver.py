@@ -524,8 +524,12 @@ class ProfitEvolver:
         # 2. Set MAS = P0 (Minimum Acceptable Score)
         MAS = P0
 
-        # Get source code of the seed strategy
-        seed_code = inspect.getsource(strategy_class)
+        # Get source code of the seed strategy. Classes loaded from the
+        # program DB carry their source in _source_code, since
+        # inspect.getsource() cannot recover code defined via exec().
+        seed_code = getattr(strategy_class, "_source_code", None)
+        if seed_code is None:
+            seed_code = inspect.getsource(strategy_class)
 
         # A cascade with a full_walkforward stage needs folds; without them,
         # stop after single_fold so candidates aren't failed on a missing input

@@ -156,6 +156,15 @@ class TestParserDefaults:
             "--coder-model",
         } <= flags
 
+    def test_resume_from(self):
+        parser = build_parser()
+        assert parser.parse_args([]).resume_from is None
+        assert parser.parse_args(["--resume-from", "best"]).resume_from == "best"
+        assert (
+            parser.parse_args(["--resume-from", "ab12cd34"]).resume_from
+            == "ab12cd34"
+        )
+
     def test_selection_policy_choices(self):
         parser = build_parser()
         args = parser.parse_args(["--selection-policy", "pareto"])

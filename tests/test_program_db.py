@@ -249,6 +249,56 @@ class TestProgramDatabase:
         assert strategy_id is not None
         assert len(strategy_id) == 8
 
+    def test_get_best_strategy(self, db):
+        """Should return the top accepted strategy by ann_return."""
+        db.register_strategy(
+            code="class A: pass",
+            class_name="A",
+            parent_ids=[],
+            mutation_text="",
+            metrics={"ann_return": 5.0},
+            tags=[],
+        )
+        best_id = db.register_strategy(
+            code="class B: pass",
+            class_name="B",
+            parent_ids=[],
+            mutation_text="",
+            metrics={"ann_return": 20.0},
+            tags=[],
+        )
+        # Higher return but rejected: must not win
+        db.register_strategy(
+            code="class C: pass",
+            class_name="C",
+            parent_ids=[],
+            mutation_text="",
+            metrics={"ann_return": 50.0},
+            tags=[],
+            status=StrategyStatus.REJECTED,
+        )
+
+        best = db.get_best_strategy()
+        assert best is not None
+        assert best.id == best_id
+        assert best.class_name == "B"
+
+    def test_get_best_strategy_empty_db(self, db):
+        """Should return None when nothing matches."""
+        assert db.get_best_strategy() is None
+
+        # Only a rejected strategy: still None with default status filter
+        db.register_strategy(
+            code="class C: pass",
+            class_name="C",
+            parent_ids=[],
+            mutation_text="",
+            metrics={"ann_return": 50.0},
+            tags=[],
+            status=StrategyStatus.REJECTED,
+        )
+        assert db.get_best_strategy() is None
+
     def test_get_strategy(self, db):
         """Should retrieve a registered strategy."""
         strategy_id = db.register_strategy(

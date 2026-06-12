@@ -109,6 +109,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=STRATEGIES.keys(),
         help="Seed strategy to evolve",
     )
+    parser.add_argument(
+        "--resume-from",
+        metavar="ID|best",
+        help=(
+            "Seed evolution from a strategy stored in the program database "
+            "instead of --strategy. Pass a strategy ID, or 'best' for the "
+            "top accepted strategy by annualized return."
+        ),
+    )
     # LLM configuration (Phase 12: dual-model support)
     llm_group = parser.add_argument_group("LLM Configuration")
     llm_group.add_argument(
@@ -484,9 +493,51 @@ from backtesting import Strategy
     else:
         print("Diff mutations: disabled (using full rewrites)")
 
-    # Get strategy class
-    strategy_class = STRATEGIES[args.strategy]
-    print(f"Using seed strategy: {strategy_class.__name__}")
+    # Get strategy class: from the program DB (--resume-from) or built-ins
+    if args.resume_from:
+        from profit.evaluation import load_strategy_class
+
+        if args.resume_from.lower() == "best":
+            record = program_db.get_best_strategy()
+            if record is None:
+                print(
+                    "Error: No accepted strategies in the program database to "
+                    "resume from. Run an evolution first, or pass a strategy ID."
+                )
+                return 1
+        else:
+            record = program_db.get_strategy(args.resume_from)
+            if record is None:
+                print(
+                    f"Error: Strategy '{args.resume_from}' not found in database"
+                )
+                return 1
+
+        try:
+            strategy_class = load_strategy_class(
+                record.code,
+                expected_class_name=record.class_name or None,
+            )
+        except (SyntaxError, ValueError) as e:
+            print(f"Error: Could not load strategy [{record.id}] from database: {e}")
+            return 1
+
+        # The evolver reads seed source from here; inspect.getsource()
+        # cannot recover code defined via exec()
+        strategy_class._source_code = record.code
+
+        metrics_str = ", ".join(
+            f"{k}={v:.2f}" for k, v in sorted(record.metrics.items())
+        )
+        print(
+            f"Resuming from [{record.id}] {strategy_class.__name__} "
+            f"(status={record.status.value}, gen={record.generation}"
+            + (f", {metrics_str}" if metrics_str else "")
+            + ")"
+        )
+    else:
+        strategy_class = STRATEGIES[args.strategy]
+        print(f"Using seed strategy: {strategy_class.__name__}")
 
     # Phase 15: Build selection policy if specified
     selection_policy = None

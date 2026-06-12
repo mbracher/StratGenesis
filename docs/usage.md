@@ -39,6 +39,12 @@ uv run python -m profit.main --data data/ES_hourly.csv --skip-cascade
 # Use the sqlite program database backend
 uv run python -m profit.main --data data/ES_hourly.csv --db-backend sqlite
 
+# Resume evolution from the best accepted strategy in the program database
+uv run python -m profit.main --data data/ES_hourly.csv --resume-from best
+
+# Resume evolution from a specific strategy by ID
+uv run python -m profit.main --data data/ES_hourly.csv --resume-from <ID>
+
 # Export a strategy from the program database by ID
 uv run python -m profit.main --export-strategy <ID>
 

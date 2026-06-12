@@ -8,6 +8,7 @@
 |----------|---------|-------------|
 | `--data` | Required | Path to OHLCV CSV file (not needed with `--export-strategy`) |
 | `--strategy` | EMACrossover | Seed strategy to evolve |
+| `--resume-from` | — | Seed evolution from a program database strategy instead of `--strategy`: pass a strategy ID, or `best` for the top accepted strategy by annualized return |
 | `--folds` | 5 | Number of walk-forward folds |
 | `--capital` | 10000 | Initial capital |
 | `--commission` | 0.002 | Commission rate (0.2%) |

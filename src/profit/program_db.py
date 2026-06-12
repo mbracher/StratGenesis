@@ -1321,6 +1321,32 @@ class ProgramDatabase:
         """Retrieve a strategy by ID."""
         return self.backend.load(strategy_id)
 
+    def get_best_strategy(
+        self,
+        metric: str = "ann_return",
+        eval_context_id: Optional[str] = None,
+        status: StrategyStatus = StrategyStatus.ACCEPTED,
+    ) -> Optional[StrategyRecord]:
+        """Retrieve the top-performing strategy record by a metric.
+
+        Args:
+            metric: Metric to rank by (default: ann_return).
+            eval_context_id: Optional filter by evaluation context.
+            status: Status filter (default: ACCEPTED).
+
+        Returns:
+            The best StrategyRecord, or None if no strategy matches.
+        """
+        top_ids = self.backend.get_top_performers(
+            n=1,
+            metric=metric,
+            eval_context_id=eval_context_id,
+            status=status,
+        )
+        if not top_ids:
+            return None
+        return self.backend.load(top_ids[0])
+
     def update_test_metrics(self, strategy_id: str, test_return: float) -> bool:
         """Update test metrics for a strategy after fold completion.
 

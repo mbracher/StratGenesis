@@ -571,6 +571,32 @@ def clean_seed_db_id():
         del EMACrossover._db_id
 
 
+class TestSeedFromSourceCode:
+    """Seeds loaded from the program DB (--resume-from) carry their source
+    in _source_code because inspect.getsource() cannot recover exec'd code."""
+
+    def test_exec_defined_seed_uses_source_attribute(self, medium_data):
+        import inspect
+
+        from profit.evaluation import load_strategy_class
+
+        seed_class = load_strategy_class(
+            ACTIVE_CHILD_CODE, expected_class_name="EMACrossover"
+        )
+        with pytest.raises((OSError, TypeError)):
+            inspect.getsource(seed_class)
+        seed_class._source_code = ACTIVE_CHILD_CODE
+
+        mock_llm = _make_mock_llm()
+        evolver = ProfitEvolver(mock_llm)
+        train, val = medium_data.iloc[:1000], medium_data.iloc[1000:1500]
+        best_class, best_perf, best_code = evolver.evolve_strategy(
+            seed_class, train, val, max_iters=1
+        )
+
+        assert "class EMACrossover" in best_code
+
+
 class TestInspirationsWiring:
     """Phase 13: sample_inspirations must feed the analyst prompt."""
 
