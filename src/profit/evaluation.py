@@ -49,6 +49,7 @@ METRIC_CAPS = {
 def load_strategy_class(
     strategy_code: str,
     exec_globals: dict = None,
+    expected_class_name: Optional[str] = None,
 ) -> Type[Strategy]:
     """
     Load and validate a strategy class from source code.
@@ -56,6 +57,8 @@ def load_strategy_class(
     Args:
         strategy_code: Python source code defining a Strategy subclass
         exec_globals: Global namespace for exec (defaults to Strategy, pd, np)
+        expected_class_name: If given, require a Strategy subclass with exactly
+            this name (the code may also define helper classes)
 
     Returns:
         The Strategy subclass (not an instance)
@@ -73,6 +76,22 @@ def load_strategy_class(
 
     namespace = {}
     exec(strategy_code, exec_globals, namespace)
+
+    if expected_class_name is not None:
+        strategy_class = namespace.get(expected_class_name)
+        if strategy_class is None:
+            raise ValueError(
+                f"Expected strategy class '{expected_class_name}' not found in code."
+            )
+        if not (
+            isinstance(strategy_class, type)
+            and issubclass(strategy_class, Strategy)
+            and strategy_class is not Strategy
+        ):
+            raise ValueError(
+                f"'{expected_class_name}' is not a backtesting.Strategy subclass."
+            )
+        return strategy_class
 
     # Find the Strategy subclass (strict check)
     strategy_class = None
@@ -732,7 +751,10 @@ class SmokeTestStage:
                 data_slice = data.iloc[:slice_days]
 
             # Use centralized helper (strict Strategy check)
-            strategy_class = load_strategy_class(strategy_code)
+            strategy_class = load_strategy_class(
+                strategy_code,
+                expected_class_name=kwargs.get("expected_class_name"),
+            )
             _ = run_bt(
                 strategy_class,
                 data_slice,
@@ -813,7 +835,10 @@ class SingleFoldStage:
 
         try:
             # Use centralized helper
-            strategy_class = load_strategy_class(strategy_code)
+            strategy_class = load_strategy_class(
+                strategy_code,
+                expected_class_name=kwargs.get("expected_class_name"),
+            )
             bt_result = run_bt(
                 strategy_class,
                 data,
@@ -902,7 +927,10 @@ class FullWalkForwardStage:
 
         try:
             # Use centralized helper
-            strategy_class = load_strategy_class(strategy_code)
+            strategy_class = load_strategy_class(
+                strategy_code,
+                expected_class_name=kwargs.get("expected_class_name"),
+            )
 
             # Run across all folds
             fold_metrics = []

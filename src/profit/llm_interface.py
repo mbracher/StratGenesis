@@ -37,8 +37,8 @@ except ImportError:
 
 # Default models per provider
 DEFAULT_MODELS = {
-    "openai": "gpt-4",
-    "anthropic": "claude-sonnet-4-20250514",
+    "openai": "gpt-5.2",
+    "anthropic": "claude-sonnet-4-6",
 }
 
 
@@ -74,14 +74,14 @@ class LLMClient:
 
         Examples:
             # Single provider (backward compatible)
-            client = LLMClient(provider="anthropic", model="claude-sonnet-4-20250514")
+            client = LLMClient(provider="anthropic", model="claude-sonnet-4-6")
 
             # Dual-model: OpenAI for analysis, Anthropic for coding
             client = LLMClient(
                 analyst_provider="openai",
-                analyst_model="gpt-4",
+                analyst_model="gpt-5.2",
                 coder_provider="anthropic",
-                coder_model="claude-sonnet-4-20250514",
+                coder_model="claude-sonnet-4-6",
             )
         """
         # Store API keys
@@ -94,22 +94,26 @@ class LLMClient:
         # Resolve analyst configuration
         self.analyst_provider = analyst_provider or default_provider
         self.analyst_model = (
-            analyst_model or model or DEFAULT_MODELS.get(self.analyst_provider, "gpt-4")
+            analyst_model or model or self._default_model(self.analyst_provider)
         )
 
         # Resolve coder configuration
         self.coder_provider = coder_provider or default_provider
         self.coder_model = (
-            coder_model or model or DEFAULT_MODELS.get(self.coder_provider, "gpt-4")
+            coder_model or model or self._default_model(self.coder_provider)
         )
 
         # Legacy attributes for backward compatibility
         self.provider = default_provider
-        self.model = model or DEFAULT_MODELS.get(default_provider, "gpt-4")
+        self.model = model or self._default_model(default_provider)
 
         # Initialize API clients for providers in use
         self._clients: dict = {}
         self._init_clients()
+
+    def _default_model(self, provider: str) -> str:
+        """Return default model for a provider."""
+        return DEFAULT_MODELS.get(provider, DEFAULT_MODELS["openai"])
 
     def _init_clients(self) -> None:
         """Initialize API clients for providers in use."""

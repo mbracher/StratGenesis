@@ -545,3 +545,14 @@ class EMACrossover_Gen5(Strategy):
 - [x] `load_strategy()` utility function
 - [x] CLI `--output-dir` argument
 - [x] Unit tests for persistence functionality
+
+---
+
+## Implementation Notes
+
+File persistence is implemented but **deprecated**. `ProfitEvolver.output_dir` and the CLI
+`--output-dir` flag default to `None` (off) and emit a `DeprecationWarning` when used. The
+Phase 13 program database is the system of record; `--export-strategy <ID> [--export-dir DIR]`
+replaces ad-hoc file output. `scripts/migrate_to_program_db.py` migrates legacy
+`evolved_strategies/run_*/` directories into the program database (dry-run by default,
+`--apply` to perform).

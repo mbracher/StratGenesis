@@ -285,11 +285,18 @@ class RandomStrategy(Strategy):
 
     When flat, randomly choose to go long, short, or do nothing.
     If holding a position, exit with 50% probability each time step.
+
+    The seed is a backtesting.py parameter: the default (42) keeps baseline
+    comparisons and tests reproducible. Override it for a different random
+    run (e.g. ``bt.run(seed=7)``), or set it to None to draw fresh OS
+    entropy on every run.
     """
 
+    seed = 42
+
     def init(self):
-        # Use numpy RandomState for reproducibility (set a seed if desired)
-        self.rs = np.random.RandomState(42)  # fixed seed for repeatable random behavior
+        # RandomState(None) seeds from OS entropy (non-reproducible runs)
+        self.rs = np.random.RandomState(self.seed)
 
     def next(self):
         if not self.position:

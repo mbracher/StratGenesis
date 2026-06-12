@@ -36,10 +36,14 @@ profit/
 │   ├── strategies.py      # Seed and baseline strategies
 │   ├── llm_interface.py   # LLM client for mutations
 │   ├── evolver.py         # Evolutionary engine
+│   ├── program_db.py      # AlphaEvolve-style program database
+│   ├── diff_utils.py      # Diff-based code mutation utilities
+│   ├── evaluation.py      # Multi-metric evaluation and cascade
 │   └── main.py            # CLI entry point
 ├── scripts/               # Data download utilities (PEP 723 inline deps)
 ├── tests/                 # Test suite
 ├── specs/                 # Phase specifications (implementation details)
+├── docs/                  # User documentation
 ├── ROADMAP.md             # Implementation roadmap
 └── README.md              # Project documentation
 ```
@@ -63,6 +67,11 @@ Detailed implementation specs are in the `specs/` directory:
 | `phase-11-strategy-persistence.md` | Strategy persistence to disk |
 | `phase-12-dual-model-llm.md` | Dual-model LLM configuration |
 | `phase-13-program-database.md` | AlphaEvolve-style program database |
+| `phase-14-diff-based-mutations.md` | Diff-based code mutations |
+| `phase-15-multi-metric-evaluation.md` | Multi-metric evaluation cascade |
+| `phase-16-research-data-agents.md` | Researcher and data collector agents (future, not implemented) |
+| `phase-17-multi-asset-portfolio.md` | Multi-asset and portfolio support (future, not implemented) |
+| `phase-18-production-monitoring.md` | Production loop and monitoring (future, not implemented) |
 
 **Always consult the relevant spec file before implementing a phase.**
 
@@ -124,6 +133,8 @@ Detailed implementation specs are in the `specs/` directory:
 - `backtesting` - Strategy simulation engine
 - `pandas`, `numpy` - Data handling
 - `openai`, `anthropic` - LLM API clients
+- `ta` - Technical indicators available to evolved strategies
+- `python-dotenv` - `.env` loading
 
 ### Evolutionary Loop Algorithm
 
@@ -153,3 +164,7 @@ Detailed implementation specs are in the `specs/` directory:
 | Gap between periods | 10 days |
 | Max evolution iterations | 15 |
 | Max code repair attempts | 10 |
+| Selection policy | gated |
+| Evaluation cascade | full (4-stage, on by default) |
+| Program database | json backend at `./program_db` |
+| Default LLM models | gpt-5.2 (OpenAI) / claude-sonnet-4-6 (Anthropic) |

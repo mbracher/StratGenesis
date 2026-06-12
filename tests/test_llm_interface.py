@@ -17,12 +17,12 @@ class TestLLMClientInit:
                 mock_openai.OpenAI.return_value = Mock()
                 client = LLMClient()
                 assert client.provider == "openai"
-                assert client.model == "gpt-4"
+                assert client.model == "gpt-5.2"
                 # Also check analyst/coder defaults
                 assert client.analyst_provider == "openai"
-                assert client.analyst_model == "gpt-4"
+                assert client.analyst_model == "gpt-5.2"
                 assert client.coder_provider == "openai"
-                assert client.coder_model == "gpt-4"
+                assert client.coder_model == "gpt-5.2"
 
     def test_anthropic_provider(self):
         """Should initialize Anthropic client when specified."""
@@ -77,15 +77,15 @@ class TestDualModelConfiguration:
 
                     client = LLMClient(
                         analyst_provider="openai",
-                        analyst_model="gpt-4",
+                        analyst_model="gpt-5.2",
                         coder_provider="anthropic",
-                        coder_model="claude-sonnet-4-20250514",
+                        coder_model="claude-sonnet-4-6",
                     )
 
                     assert client.analyst_provider == "openai"
-                    assert client.analyst_model == "gpt-4"
+                    assert client.analyst_model == "gpt-5.2"
                     assert client.coder_provider == "anthropic"
-                    assert client.coder_model == "claude-sonnet-4-20250514"
+                    assert client.coder_model == "claude-sonnet-4-6"
 
     def test_dual_model_same_provider_different_models(self):
         """Should support different models within same provider."""
@@ -95,12 +95,12 @@ class TestDualModelConfiguration:
 
                 client = LLMClient(
                     analyst_provider="openai",
-                    analyst_model="gpt-4",
+                    analyst_model="gpt-5.2",
                     coder_provider="openai",
                     coder_model="gpt-3.5-turbo",
                 )
 
-                assert client.analyst_model == "gpt-4"
+                assert client.analyst_model == "gpt-5.2"
                 assert client.coder_model == "gpt-3.5-turbo"
 
     def test_role_specific_overrides_default(self):
@@ -114,20 +114,20 @@ class TestDualModelConfiguration:
                     mock_openai.OpenAI.return_value = Mock()
                     mock_anthropic.Anthropic.return_value = Mock()
 
-                    # Default is openai/gpt-4, but override coder to anthropic
+                    # Default is openai/gpt-5.2, but override coder to anthropic
                     client = LLMClient(
                         provider="openai",
-                        model="gpt-4",
+                        model="gpt-5.2",
                         coder_provider="anthropic",
-                        coder_model="claude-sonnet-4-20250514",
+                        coder_model="claude-sonnet-4-6",
                     )
 
                     # Analyst should use defaults
                     assert client.analyst_provider == "openai"
-                    assert client.analyst_model == "gpt-4"
+                    assert client.analyst_model == "gpt-5.2"
                     # Coder should use overrides
                     assert client.coder_provider == "anthropic"
-                    assert client.coder_model == "claude-sonnet-4-20250514"
+                    assert client.coder_model == "claude-sonnet-4-6"
 
     def test_backward_compatibility_single_provider(self):
         """Single provider mode should still work (backward compatible)."""
@@ -135,13 +135,13 @@ class TestDualModelConfiguration:
             with patch("profit.llm_interface.openai") as mock_openai:
                 mock_openai.OpenAI.return_value = Mock()
 
-                client = LLMClient(provider="openai", model="gpt-4")
+                client = LLMClient(provider="openai", model="gpt-5.2")
 
                 # Both roles should use same config
                 assert client.analyst_provider == "openai"
-                assert client.analyst_model == "gpt-4"
+                assert client.analyst_model == "gpt-5.2"
                 assert client.coder_provider == "openai"
-                assert client.coder_model == "gpt-4"
+                assert client.coder_model == "gpt-5.2"
 
     def test_default_models_per_provider(self):
         """Should use correct default models when not specified."""
@@ -160,8 +160,20 @@ class TestDualModelConfiguration:
                     )
 
                     # Should use provider-specific defaults
-                    assert client.analyst_model == "gpt-4"
-                    assert client.coder_model == "claude-sonnet-4-20250514"
+                    assert client.analyst_model == "gpt-5.2"
+                    assert client.coder_model == "claude-sonnet-4-6"
+
+    def test_default_model_method(self):
+        """_default_model should map providers to defaults, with openai fallback."""
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            with patch("profit.llm_interface.openai") as mock_openai:
+                mock_openai.OpenAI.return_value = Mock()
+                client = LLMClient()
+
+                assert client._default_model("openai") == "gpt-5.2"
+                assert client._default_model("anthropic") == "claude-sonnet-4-6"
+                # Unknown providers fall back to the OpenAI default
+                assert client._default_model("unknown") == "gpt-5.2"
 
 
 class TestGenerateImprovement:
@@ -198,9 +210,9 @@ class TestGenerateImprovement:
 
                     client = LLMClient(
                         analyst_provider="openai",
-                        analyst_model="gpt-4",
+                        analyst_model="gpt-5.2",
                         coder_provider="anthropic",
-                        coder_model="claude-sonnet-4-20250514",
+                        coder_model="claude-sonnet-4-6",
                     )
 
                     with patch.object(client, "_chat") as mock_chat:
@@ -210,7 +222,7 @@ class TestGenerateImprovement:
                         # Should use analyst config
                         call_kwargs = mock_chat.call_args[1]
                         assert call_kwargs["provider"] == "openai"
-                        assert call_kwargs["model"] == "gpt-4"
+                        assert call_kwargs["model"] == "gpt-5.2"
 
     def test_prompt_contains_code_and_metrics(self):
         """Prompt should include both strategy code and metrics."""
@@ -281,9 +293,9 @@ class TestGenerateStrategyCode:
 
                     client = LLMClient(
                         analyst_provider="openai",
-                        analyst_model="gpt-4",
+                        analyst_model="gpt-5.2",
                         coder_provider="anthropic",
-                        coder_model="claude-sonnet-4-20250514",
+                        coder_model="claude-sonnet-4-6",
                     )
 
                     with patch.object(client, "_chat") as mock_chat:
@@ -293,7 +305,7 @@ class TestGenerateStrategyCode:
                         # Should use coder config
                         call_kwargs = mock_chat.call_args[1]
                         assert call_kwargs["provider"] == "anthropic"
-                        assert call_kwargs["model"] == "claude-sonnet-4-20250514"
+                        assert call_kwargs["model"] == "claude-sonnet-4-6"
 
 
 class TestFixCode:
@@ -345,9 +357,9 @@ class TestFixCode:
 
                     client = LLMClient(
                         analyst_provider="openai",
-                        analyst_model="gpt-4",
+                        analyst_model="gpt-5.2",
                         coder_provider="anthropic",
-                        coder_model="claude-sonnet-4-20250514",
+                        coder_model="claude-sonnet-4-6",
                     )
 
                     with patch.object(client, "_chat") as mock_chat:
@@ -357,7 +369,7 @@ class TestFixCode:
                         # Should use coder config
                         call_kwargs = mock_chat.call_args[1]
                         assert call_kwargs["provider"] == "anthropic"
-                        assert call_kwargs["model"] == "claude-sonnet-4-20250514"
+                        assert call_kwargs["model"] == "claude-sonnet-4-6"
 
 
 class TestCodeStripping:
@@ -428,7 +440,7 @@ class TestChatOpenAI:
 
                 client = LLMClient()
                 result = client._chat(
-                    "test prompt", provider="openai", model="gpt-4"
+                    "test prompt", provider="openai", model="gpt-5.2"
                 )
 
                 assert result == "response text"
@@ -470,7 +482,7 @@ class TestChatAnthropic:
                 result = client._chat(
                     "test prompt",
                     provider="anthropic",
-                    model="claude-sonnet-4-20250514",
+                    model="claude-sonnet-4-6",
                 )
 
                 assert result == "claude response"
@@ -496,3 +508,150 @@ class TestChatAnthropic:
 
                 call_kwargs = mock_client.messages.create.call_args[1]
                 assert call_kwargs["model"] == "claude-haiku-4-20250514"
+
+
+# ===========================================================================
+# Phase 14: Diff-pipeline LLM methods
+# ===========================================================================
+
+MARKED_STRATEGY_CODE = '''from backtesting import Strategy
+
+class S(Strategy):
+    # EVOLVE-BLOCK: params
+    fast = 10
+    # END-EVOLVE-BLOCK
+
+    def init(self):
+        pass
+
+    def next(self):
+        pass
+'''
+
+VALID_DIFF = '''<<<SEARCH block_name="params">>>
+    fast = 10
+<<<REPLACE>>>
+    fast = 20
+<<<END>>>
+'''
+
+# Parses fine but the SEARCH content does not exist in the block
+UNMATCHABLE_DIFF = '''<<<SEARCH block_name="params">>>
+    slow = 99
+<<<REPLACE>>>
+    slow = 100
+<<<END>>>
+'''
+
+
+def _make_client():
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        with patch("profit.llm_interface.openai") as mock_openai:
+            mock_openai.OpenAI.return_value = Mock()
+            return LLMClient()
+
+
+class TestGenerateDiff:
+    """Test SEARCH/REPLACE diff generation."""
+
+    def test_prompt_contents_and_routing(self):
+        client = _make_client()
+
+        with patch.object(client, "_chat") as mock_chat:
+            mock_chat.return_value = VALID_DIFF
+
+            result = client.generate_diff(
+                MARKED_STRATEGY_CODE,
+                "Increase the fast period",
+                ["params", "entry_logic"],
+            )
+
+            assert result == VALID_DIFF
+            mock_chat.assert_called_once()
+            prompt = mock_chat.call_args[0][0]
+            assert MARKED_STRATEGY_CODE in prompt
+            assert "Increase the fast period" in prompt
+            assert "params, entry_logic" in prompt
+            # Routed to the coder role without fence stripping
+            assert mock_chat.call_args.kwargs["provider"] == client.coder_provider
+            assert mock_chat.call_args.kwargs["model"] == client.coder_model
+            assert mock_chat.call_args.kwargs["expect_code"] is False
+
+
+class TestFixDiff:
+    """Test diff repair prompting."""
+
+    def test_prompt_contains_failure_context(self):
+        client = _make_client()
+
+        with patch.object(client, "_chat") as mock_chat:
+            mock_chat.return_value = VALID_DIFF
+
+            client.fix_diff(
+                MARKED_STRATEGY_CODE,
+                UNMATCHABLE_DIFF,
+                "SEARCH pattern not found",
+                "    fast = 10",
+                "params",
+            )
+
+            prompt = mock_chat.call_args[0][0]
+            assert "SEARCH pattern not found" in prompt
+            assert "params" in prompt
+            assert "fast = 10" in prompt
+            assert UNMATCHABLE_DIFF in prompt
+            assert mock_chat.call_args.kwargs["provider"] == client.coder_provider
+
+
+class TestGenerateStrategyCodeWithFallback:
+    """Test the diff-first, rewrite-fallback pipeline."""
+
+    def test_no_evolve_blocks_rewrites(self):
+        """Code without EVOLVE markers goes straight to a full rewrite."""
+        client = _make_client()
+        client.generate_diff = Mock()
+        client.generate_strategy_code = Mock(return_value="rewritten code")
+
+        code, used_diff, raw_diff = client.generate_strategy_code_with_fallback(
+            "class S(Strategy):\n    pass\n", "Improve it"
+        )
+
+        assert code == "rewritten code"
+        assert used_diff is False
+        assert raw_diff is None
+        assert not client.generate_diff.called
+        client.generate_strategy_code.assert_called_once()
+
+    def test_valid_diff_applied(self):
+        """A matching diff is applied and reported as used."""
+        client = _make_client()
+
+        with patch.object(client, "_chat") as mock_chat:
+            mock_chat.return_value = VALID_DIFF
+
+            code, used_diff, raw_diff = client.generate_strategy_code_with_fallback(
+                MARKED_STRATEGY_CODE, "Increase the fast period"
+            )
+
+            assert used_diff is True
+            assert raw_diff == VALID_DIFF
+            assert "fast = 20" in code
+            assert "fast = 10" not in code
+
+    def test_failed_diffs_fall_back_to_rewrite(self):
+        """Repeated unmatchable diffs trigger fix_diff, then a full rewrite."""
+        client = _make_client()
+        client.generate_diff = Mock(return_value=UNMATCHABLE_DIFF)
+        client.fix_diff = Mock(return_value=UNMATCHABLE_DIFF)
+        client.generate_strategy_code = Mock(return_value="rewritten code")
+
+        code, used_diff, raw_diff = client.generate_strategy_code_with_fallback(
+            MARKED_STRATEGY_CODE, "Improve it", max_diff_attempts=3
+        )
+
+        assert code == "rewritten code"
+        assert used_diff is False
+        assert raw_diff is None
+        client.generate_diff.assert_called_once()
+        assert client.fix_diff.call_count == 2  # attempts 2 and 3
+        client.generate_strategy_code.assert_called_once()

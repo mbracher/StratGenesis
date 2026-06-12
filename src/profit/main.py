@@ -2,7 +2,7 @@
 """ProFiT: LLM-Driven Evolutionary Trading System
 
 Usage:
-    uv run python -m profit.main --data data/ES_hourly.csv --strategy EMACrossover --provider openai --model gpt-4
+    uv run python -m profit.main --data data/ES_hourly.csv --strategy EMACrossover --provider openai --model gpt-5.2
 """
 
 import argparse
@@ -97,14 +97,8 @@ def print_results(results: list[dict]) -> None:
     print(f"  Improvement over Random: {avg_ret - avg_rand:+.2f}%")
 
 
-def main() -> int:
-    """Main entry point for ProFiT CLI.
-
-    Returns:
-        Exit code (0 for success, non-zero for errors).
-    """
-    load_dotenv()
-
+def build_parser() -> argparse.ArgumentParser:
+    """Build the ProFiT CLI argument parser."""
     parser = argparse.ArgumentParser(
         description="ProFiT: LLM-Driven Evolutionary Trading System"
     )
@@ -115,37 +109,37 @@ def main() -> int:
         choices=STRATEGIES.keys(),
         help="Seed strategy to evolve",
     )
-    # LLM configuration - default provider/model
-    parser.add_argument(
+    # LLM configuration (Phase 12: dual-model support)
+    llm_group = parser.add_argument_group("LLM Configuration")
+    llm_group.add_argument(
         "--provider",
         default="openai",
         choices=["openai", "anthropic"],
         help="Default LLM provider for both roles (default: openai)",
     )
-    parser.add_argument(
+    llm_group.add_argument(
         "--model",
         default=None,
         help="Default model for both roles (uses provider default if not set)",
     )
-    # Role-specific configuration
-    parser.add_argument(
+    llm_group.add_argument(
         "--analyst-provider",
         choices=["openai", "anthropic"],
         default=None,
         help="LLM provider for analysis/improvements (overrides --provider)",
     )
-    parser.add_argument(
+    llm_group.add_argument(
         "--analyst-model",
         default=None,
         help="Model for analysis/improvements (overrides --model)",
     )
-    parser.add_argument(
+    llm_group.add_argument(
         "--coder-provider",
         choices=["openai", "anthropic"],
         default=None,
         help="LLM provider for code generation (overrides --provider)",
     )
-    parser.add_argument(
+    llm_group.add_argument(
         "--coder-model",
         default=None,
         help="Model for code generation (overrides --model)",
@@ -215,8 +209,8 @@ def main() -> int:
     parser.add_argument(
         "--selection-policy",
         choices=["weighted", "gated", "pareto"],
-        default=None,
-        help="Selection policy for strategy acceptance (default: MAS threshold)",
+        default="gated",
+        help="Selection policy for strategy acceptance (default: gated)",
     )
     # Primary thresholds (for gated policy)
     parser.add_argument(
@@ -355,15 +349,31 @@ def main() -> int:
         help="Directory for exported strategies (default: exported_strategies)",
     )
 
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    """Main entry point for ProFiT CLI.
+
+    Returns:
+        Exit code (0 for success, non-zero for errors).
+    """
+    load_dotenv()
+
+    args = build_parser().parse_args()
 
     # Handle export command (doesn't require data file)
     if args.export_strategy:
         from profit.program_db import JsonFileBackend, ProgramDatabase, SqliteBackend
 
-        # Initialize database backend
+        # Initialize database backend (same path normalization as the run path)
         if args.db_backend == "sqlite":
-            backend = SqliteBackend(args.db_path + ".sqlite")
+            db_path = (
+                args.db_path
+                if args.db_path.endswith(".sqlite")
+                else f"{args.db_path}.sqlite"
+            )
+            backend = SqliteBackend(db_path)
         else:
             backend = JsonFileBackend(args.db_path)
 
@@ -429,23 +439,24 @@ from backtesting import Strategy
     print(f"LLM Analyst: {llm_client.analyst_provider}/{llm_client.analyst_model}")
     print(f"LLM Coder: {llm_client.coder_provider}/{llm_client.coder_model}")
 
-    # Initialize program database (Phase 13C)
-    program_db = None
-    if not args.no_inspirations:
-        from profit.program_db import ProgramDatabase, JsonFileBackend, SqliteBackend
+    # Initialize program database (Phase 13C). The database is always on —
+    # it is the system of record; --no-inspirations only disables sampling.
+    from profit.program_db import ProgramDatabase, JsonFileBackend, SqliteBackend
 
-        if args.db_backend == "sqlite":
-            db_path = (
-                args.db_path
-                if args.db_path.endswith(".sqlite")
-                else f"{args.db_path}.sqlite"
-            )
-            backend = SqliteBackend(db_path)
-        else:
-            backend = JsonFileBackend(args.db_path)
+    if args.db_backend == "sqlite":
+        db_path = (
+            args.db_path
+            if args.db_path.endswith(".sqlite")
+            else f"{args.db_path}.sqlite"
+        )
+        backend = SqliteBackend(db_path)
+    else:
+        backend = JsonFileBackend(args.db_path)
 
-        program_db = ProgramDatabase(backend)
-        print(f"Program database: {args.db_backend} backend at {args.db_path}")
+    program_db = ProgramDatabase(backend)
+    print(f"Program database: {args.db_backend} backend at {args.db_path}")
+    if args.no_inspirations:
+        print("Inspiration sampling: disabled")
 
     # Initialize evolver (output_dir is deprecated, use program_db instead)
     output_dir = None
@@ -505,9 +516,9 @@ from backtesting import Strategy
         if args.debug_policy:
             print("  Debug logging: ENABLED")
 
-    # Phase 15: Build evaluation cascade if not skipped
+    # Phase 15: Build evaluation cascade unless skipped (full 4-stage by default)
     cascade = None
-    if not args.skip_cascade and selection_policy is not None:
+    if not args.skip_cascade:
         from profit.evaluation import (
             MetricsCalculator,
             PromotionGate,
@@ -522,7 +533,7 @@ from backtesting import Strategy
             min_win_rate=args.gate_min_win_rate,
         )
 
-        cascade_mode = "quick" if args.quick_eval else "standard"
+        cascade_mode = "quick" if args.quick_eval else "full"
         cascade = create_cascade(
             mode=cascade_mode,
             metrics_calculator=metrics_calc,
@@ -556,6 +567,9 @@ from backtesting import Strategy
         selection_policy=selection_policy,
         cascade=cascade,
         use_inspirations=not args.no_inspirations,
+        dataset_id=Path(args.data).stem,
+        dataset_source="csv",
+        timeframe=pd.infer_freq(data.index) or "",
     )
 
     # Print results

@@ -10,7 +10,7 @@ From user requirements:
 
 ---
 
-## Available Models (December 2025)
+## Available Models (June 2026)
 
 ### OpenAI Models
 
@@ -27,21 +27,21 @@ From user requirements:
 
 | Model ID | Description | Best For |
 |----------|-------------|----------|
-| `claude-opus-4.5` | Latest flagship (Nov 2025) | Complex reasoning |
-| `claude-sonnet-4.5` | Best coding/agents (Sep 2025) | Code generation |
-| `claude-haiku-4.5` | Fast/cheap (Oct 2025) | Quick iterations |
-| `claude-opus-4.1` | Agentic tasks focused | Multi-step tasks |
-| `claude-sonnet-4` | Previous gen Sonnet | Balanced tasks |
+| `claude-opus-4-8` | Latest flagship | Complex reasoning, analysis |
+| `claude-sonnet-4-6` | Best coding/agents | Code generation |
+| `claude-haiku-4-5` | Fast/cheap | Quick iterations |
+
+Model IDs are exact strings — no date suffixes.
 
 ### Recommended Configurations
 
 | Use Case | Analyst (LLM A) | Coder (LLM B) |
 |----------|-----------------|---------------|
-| Best quality | `gpt-5.2-thinking` | `claude-sonnet-4.5` |
-| Balanced | `gpt-5.1` | `claude-sonnet-4.5` |
-| Cost-effective | `gpt-5` | `claude-haiku-4.5` |
+| Best quality | `claude-opus-4-8` | `claude-sonnet-4-6` |
+| Balanced | `gpt-5.2` | `claude-sonnet-4-6` |
+| Cost-effective | `claude-haiku-4-5` | `claude-haiku-4-5` |
 | OpenAI only | `gpt-5.2` | `gpt-5-codex` |
-| Anthropic only | `claude-opus-4.5` | `claude-sonnet-4.5` |
+| Anthropic only | `claude-opus-4-8` | `claude-sonnet-4-6` |
 
 ---
 
@@ -85,14 +85,14 @@ class LLMClient:
 
         Examples:
             # Single provider (backward compatible)
-            client = LLMClient(provider="anthropic", model="claude-sonnet-4.5")
+            client = LLMClient(provider="anthropic", model="claude-sonnet-4-6")
 
             # Dual-model: OpenAI for analysis, Anthropic for coding
             client = LLMClient(
                 analyst_provider="openai",
                 analyst_model="gpt-5.2",
                 coder_provider="anthropic",
-                coder_model="claude-sonnet-4.5",
+                coder_model="claude-sonnet-4-6",
             )
         """
 ```
@@ -120,10 +120,10 @@ def __init__(self, ...):
 def _default_model(self, provider: str) -> str:
     """Return default model for a provider."""
     defaults = {
-        "openai": "gpt-5.1",
-        "anthropic": "claude-sonnet-4.5",
+        "openai": "gpt-5.2",
+        "anthropic": "claude-sonnet-4-6",
     }
-    return defaults.get(provider, "gpt-5.1")
+    return defaults.get(provider, "gpt-5.2")
 
 def _init_clients(self):
     """Initialize API clients for providers in use."""
@@ -345,15 +345,14 @@ print(f"Coder: {llm_client.coder_provider}/{llm_client.coder_model}")
 # Single provider (backward compatible)
 uv run python -m profit.main --data btc.csv --strategy EMACrossover --provider anthropic
 
-# Dual-model: GPT-5.2 for analysis, Claude Sonnet 4.5 for coding
+# Dual-model: GPT-5.2 for analysis, Claude Sonnet 4.6 for coding
 uv run python -m profit.main --data btc.csv --strategy EMACrossover \
     --analyst-provider openai --analyst-model gpt-5.2 \
-    --coder-provider anthropic --coder-model claude-sonnet-4.5
+    --coder-provider anthropic --coder-model claude-sonnet-4-6
 
-# Cost-effective: GPT-5 for analysis, Claude Haiku for coding
+# Cost-effective: Claude Haiku for both roles
 uv run python -m profit.main --data btc.csv --strategy EMACrossover \
-    --analyst-provider openai --analyst-model gpt-5 \
-    --coder-provider anthropic --coder-model claude-haiku-4.5
+    --provider anthropic --model claude-haiku-4-5
 ```
 
 ### Programmatic Usage
@@ -367,7 +366,7 @@ llm = LLMClient(
     analyst_provider="openai",
     analyst_model="gpt-5.2",
     coder_provider="anthropic",
-    coder_model="claude-sonnet-4.5",
+    coder_model="claude-sonnet-4-6",
 )
 
 evolver = ProfitEvolver(llm_client=llm)
@@ -444,12 +443,12 @@ def test_dual_model_initialization():
         analyst_provider="openai",
         analyst_model="gpt-5.1",
         coder_provider="anthropic",
-        coder_model="claude-sonnet-4.5",
+        coder_model="claude-sonnet-4-6",
     )
     assert client.analyst_provider == "openai"
     assert client.analyst_model == "gpt-5.1"
     assert client.coder_provider == "anthropic"
-    assert client.coder_model == "claude-sonnet-4.5"
+    assert client.coder_model == "claude-sonnet-4-6"
 
 
 def test_backward_compatibility():
@@ -467,8 +466,8 @@ def test_default_models():
         analyst_provider="openai",
         coder_provider="anthropic",
     )
-    assert client.analyst_model == "gpt-5.1"  # OpenAI default
-    assert client.coder_model == "claude-sonnet-4.5"  # Anthropic default
+    assert client.analyst_model == "gpt-5.2"  # OpenAI default
+    assert client.coder_model == "claude-sonnet-4-6"  # Anthropic default
 ```
 
 ---
@@ -504,3 +503,13 @@ def test_default_models():
 - [Introducing GPT-5.2 | OpenAI](https://openai.com/index/introducing-gpt-5-2/)
 - [Anthropic Models Overview](https://docs.anthropic.com/en/docs/about-claude/models/overview)
 - [Introducing Claude Opus 4.5](https://www.anthropic.com/news/claude-opus-4-5)
+
+---
+
+## Implementation Notes
+
+- Provider defaults live in the `DEFAULT_MODELS` module constant in `src/profit/llm_interface.py`,
+  exposed via `LLMClient._default_model(provider)`. Current values:
+  `{"openai": "gpt-5.2", "anthropic": "claude-sonnet-4-6"}`.
+- Model IDs in this spec are updated as new models ship; the `DEFAULT_MODELS` constant is the
+  source of truth. IDs are exact, with no date suffixes.

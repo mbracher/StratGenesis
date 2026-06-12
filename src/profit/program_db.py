@@ -325,6 +325,18 @@ class StrategyRecord:
     # Code repair tracking
     repair_attempts: int = 0  # Number of code fixes needed (0-10)
 
+    # Cascade evaluation annotation (Phase 15: CascadeResult.to_dict())
+    cascade_result: Dict = field(default_factory=dict)
+
+    # Future-proofing for research/data agents (Phase 16)
+    data_requirements: List[str] = field(default_factory=list)  # Datasets the strategy needs
+    data_source_status: str = ""  # e.g. "available", "pending_approval"
+    research_sources: List[str] = field(default_factory=list)  # Idea provenance (papers, posts)
+
+    # Future-proofing for multi-asset/portfolio (Phase 17)
+    universe_id: Optional[str] = None  # Universe manifest the strategy targets
+    portfolio_metrics: Dict[str, float] = field(default_factory=dict)  # Portfolio-level metrics
+
 
 class ProgramDatabaseBackend(Protocol):
     """Abstract interface for strategy storage backends."""
@@ -666,7 +678,16 @@ class SqliteBackend:
                     improvement_delta REAL DEFAULT 0.0,
                     next_method_excerpt TEXT,
                     diff_from_parent TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    val_return REAL,
+                    test_return REAL,
+                    repair_attempts INTEGER DEFAULT 0,
+                    cascade_result TEXT,
+                    data_requirements TEXT,
+                    data_source_status TEXT,
+                    research_sources TEXT,
+                    universe_id TEXT,
+                    portfolio_metrics TEXT
                 );
 
                 -- CRITICAL: Proper join table for parent relationships (not JSON!)
@@ -742,6 +763,33 @@ class SqliteBackend:
                     ON behavior_descriptors(strategy_id);
             """
             )
+            self._migrate_schema(conn)
+
+    # Columns added after the original Phase 13 schema; CREATE TABLE IF NOT
+    # EXISTS won't alter existing databases, so add them retroactively.
+    _SCHEMA_ADDITIONS = {
+        "val_return": "REAL",
+        "test_return": "REAL",
+        "repair_attempts": "INTEGER DEFAULT 0",
+        "cascade_result": "TEXT",
+        "data_requirements": "TEXT",
+        "data_source_status": "TEXT",
+        "research_sources": "TEXT",
+        "universe_id": "TEXT",
+        "portfolio_metrics": "TEXT",
+    }
+
+    def _migrate_schema(self, conn) -> None:
+        """Add any missing columns to an existing strategies table."""
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(strategies)")
+        }
+        for column, col_type in self._SCHEMA_ADDITIONS.items():
+            if column not in existing:
+                conn.execute(
+                    f"ALTER TABLE strategies ADD COLUMN {column} {col_type}"
+                )
 
     def save(self, record: StrategyRecord) -> str:
         """Save strategy record to database."""
@@ -752,8 +800,11 @@ class SqliteBackend:
                 INSERT OR REPLACE INTO strategies
                 (id, code, class_name, status, mutation_text, generation,
                  fold, asset, eval_context_id, improvement_delta,
-                 next_method_excerpt, diff_from_parent, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 next_method_excerpt, diff_from_parent, created_at,
+                 val_return, test_return, repair_attempts, cascade_result,
+                 data_requirements, data_source_status, research_sources,
+                 universe_id, portfolio_metrics)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     record.id,
@@ -771,6 +822,15 @@ class SqliteBackend:
                     record.next_method_excerpt,
                     record.diff_from_parent,
                     record.created_at.isoformat(),
+                    record.val_return,
+                    record.test_return,
+                    record.repair_attempts,
+                    json.dumps(record.cascade_result),
+                    json.dumps(record.data_requirements),
+                    record.data_source_status,
+                    json.dumps(record.research_sources),
+                    record.universe_id,
+                    json.dumps(record.portfolio_metrics),
                 ),
             )
 
@@ -942,6 +1002,15 @@ class SqliteBackend:
                 improvement_delta=row["improvement_delta"],
                 next_method_excerpt=row["next_method_excerpt"] or "",
                 diff_from_parent=row["diff_from_parent"] or "",
+                val_return=row["val_return"],
+                test_return=row["test_return"],
+                repair_attempts=row["repair_attempts"] or 0,
+                cascade_result=json.loads(row["cascade_result"] or "{}"),
+                data_requirements=json.loads(row["data_requirements"] or "[]"),
+                data_source_status=row["data_source_status"] or "",
+                research_sources=json.loads(row["research_sources"] or "[]"),
+                universe_id=row["universe_id"],
+                portfolio_metrics=json.loads(row["portfolio_metrics"] or "{}"),
             )
 
     def query(self, filters: Dict) -> List[StrategyRecord]:
@@ -1130,6 +1199,7 @@ class ProgramDatabase:
         diff_from_parent: str = "",
         val_return: Optional[float] = None,
         repair_attempts: int = 0,
+        cascade_result: Optional[Dict] = None,
     ) -> str:
         """Register a strategy in the database (accepted or rejected).
 
@@ -1149,6 +1219,7 @@ class ProgramDatabase:
             diff_from_parent: Git-style diff showing changes from parent strategy.
             val_return: Validation set annualized return.
             repair_attempts: Number of code repair attempts needed (0-10).
+            cascade_result: Serialized CascadeResult dict (Phase 15).
 
         Returns:
             The assigned strategy ID.
@@ -1181,6 +1252,7 @@ class ProgramDatabase:
             diff_from_parent=diff_from_parent,
             val_return=val_return,
             repair_attempts=repair_attempts,
+            cascade_result=cascade_result or {},
         )
         return self.backend.save(record)
 

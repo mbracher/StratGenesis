@@ -165,7 +165,7 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 - [x] Save metadata as `.json` files
 - [x] Run summary generation
 - [x] `load_strategy()` utility function
-- [x] CLI `--output-dir` argument
+- [x] CLI `--output-dir` argument (deprecated since Phase 13; the program database is the system of record)
 
 ---
 
@@ -190,6 +190,9 @@ This roadmap outlines incremental steps for implementing the ProFiT (Program Sea
 | Strategies | `src/profit/strategies.py` | 5 seed + 2 baseline strategies |
 | LLM Client | `src/profit/llm_interface.py` | `LLMClient` |
 | Evolution | `src/profit/evolver.py` | `ProfitEvolver` |
+| Program DB | `src/profit/program_db.py` | `ProgramDatabase`, `StrategyRecord`, sampling modes |
+| Diff Utils | `src/profit/diff_utils.py` | `parse_diff_response()`, `apply_diff()`, `validate_modified_code()` |
+| Evaluation | `src/profit/evaluation.py` | `EvaluationCascade`, `MetricsCalculator`, selection policies |
 | CLI | `src/profit/main.py` | Entry point |
 | Tests | `tests/` | pytest suite |
 
@@ -242,6 +245,7 @@ AlphaEvolve-style program database with backend abstraction for strategy storage
 - [x] Atomic writes for JSON backend
 - [x] Append-only index with compaction
 - [x] CLI arguments (`--db-backend`, `--db-path`, `--no-inspirations`)
+- [x] `scripts/migrate_to_program_db.py` migration script
 - [x] Performance tests for both backends
 
 ### Phase 13D (Advanced Sampling) ✅
@@ -310,16 +314,16 @@ Multi-objective evaluation with fast rejection cascade.
 - [x] Policy-based fitness ranking for best strategy
 
 ### CLI Integration ✅
-- [x] `--selection-policy` (weighted/gated/pareto)
+- [x] `--selection-policy` (weighted/gated/pareto, default: gated)
 - [x] Primary thresholds: `--min-return`, `--min-sharpe`, `--max-drawdown`, `--min-trades`
 - [x] Robustness thresholds: `--min-consistency`, `--min-worst-fold`, `--max-stability`
 - [x] WeightedSum weights: `--w-return`, `--w-sharpe`, `--w-drawdown`
-- [x] Pareto config: `--pareto-objectives`
+- [x] Pareto config: `--pareto-objectives`, `--debug-policy`
 - [x] Cascade config: `--skip-cascade`, `--quick-eval`, `--smoke-months`, `--risk-free-rate`
-- [x] Promotion gate: `--gate-min-trades`, `--gate-max-drawdown`
+- [x] Promotion gate: `--gate-min-trades`, `--gate-max-drawdown`, `--gate-min-sharpe`, `--gate-min-win-rate`
 
 ### Tests ✅
-- [x] 48 tests for evaluation module (all passing)
+- [x] 66 tests for evaluation module (all passing)
 - [x] Core helpers, cache, metrics, stages, cascade, policies tested
 
 ---

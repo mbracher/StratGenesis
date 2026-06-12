@@ -1683,3 +1683,22 @@ src/profit/
 - [x] Cache hit/miss
 - [x] Selection policies with population context
 - [x] Strict strategy class loading (rejects non-Strategy)
+
+---
+
+## Implementation Notes
+
+- `ParetoPolicy.dominates` does not negate `max_drawdown`: the spec's negation double-counted
+  the sign convention (metrics already store drawdown as negative). Fixed in commit `1fc9fec`
+  with a regression test.
+- If the seed strategy fails the cascade, the evolver warns and falls back to direct-backtest
+  baseline metrics instead of raising, so a gate-tripping seed does not abort the run.
+- When a cascade containing `FullWalkForwardStage` is invoked without folds, the evolver stops
+  the cascade after `single_fold` rather than failing candidates on a missing input; folds are
+  threaded automatically from `walk_forward_optimize()`.
+- To prevent look-ahead bias, `walk_forward_optimize()` threads only folds up to and including
+  the current one (`folds[:i]`) into fold *i*'s evolution loop: later folds' validation windows
+  lie after fold *i*'s test period and must not influence candidate selection.
+- Cascade stages receive the evolver's `expected_class_name`, so a candidate that defines
+  helper classes is gated and scored on the named strategy class, not the first `Strategy`
+  subclass in definition order.

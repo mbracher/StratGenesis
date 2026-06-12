@@ -71,6 +71,28 @@ class TestBaselineStrategies:
         result2 = bt2.run()
         assert result1["# Trades"] == result2["# Trades"]
 
+    def test_random_strategy_seed_parameter(self, small_data):
+        """Seed should be a backtesting.py parameter, overridable per run."""
+        assert RandomStrategy.seed == 42
+
+        bt = Backtest(small_data, RandomStrategy, cash=10000, commission=0.002, finalize_trades=True)
+        default_result = bt.run()
+        same_seed_result = bt.run(seed=42)
+        other_seed_result = bt.run(seed=7)
+
+        # Explicit seed=42 must match the default run exactly
+        assert same_seed_result["# Trades"] == default_result["# Trades"]
+        assert same_seed_result["Return [%]"] == default_result["Return [%]"]
+        # A different seed must change the random trade stream (deterministic
+        # on the seeded fixture; catches implementations that ignore the param)
+        assert other_seed_result["Return [%]"] != default_result["Return [%]"]
+
+    def test_random_strategy_seed_none(self, small_data):
+        """seed=None should draw fresh entropy and still run."""
+        bt = Backtest(small_data, RandomStrategy, cash=10000, commission=0.002, finalize_trades=True)
+        result = bt.run(seed=None)
+        assert result is not None
+
     def test_buy_and_hold_runs(self, small_data):
         """Buy-and-hold strategy should run without errors."""
         bt = Backtest(small_data, BuyAndHoldStrategy, cash=10000, commission=0.002, finalize_trades=True)
@@ -78,12 +100,12 @@ class TestBaselineStrategies:
         assert result is not None
 
     def test_buy_and_hold_single_trade(self, small_data):
-        """Buy-and-hold should make at most one trade (may be 0 if position never closed)."""
+        """Buy-and-hold should make exactly one trade."""
         bt = Backtest(small_data, BuyAndHoldStrategy, cash=10000, commission=0.002, finalize_trades=True)
         result = bt.run()
-        # backtesting.py only counts a "trade" when position is closed
-        # Buy-and-hold may show 0 trades if position is held until end
-        assert result["# Trades"] <= 1
+        # finalize_trades=True closes the held position at the end of the
+        # backtest, so the single buy is always counted as one trade
+        assert result["# Trades"] == 1
 
 
 class TestStrategyParameters:

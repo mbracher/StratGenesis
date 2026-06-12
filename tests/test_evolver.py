@@ -5,6 +5,7 @@ import pytest
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock
+import numpy as np
 import pandas as pd
 
 from profit.evolver import ProfitEvolver, StrategyPersister, load_strategy
@@ -299,9 +300,9 @@ class TestStrategyPersister:
             run_dir = persister.start_run(
                 "TestStrategy",
                 analyst_provider="openai",
-                analyst_model="gpt-4",
+                analyst_model="gpt-5.2",
                 coder_provider="openai",
-                coder_model="gpt-4",
+                coder_model="gpt-5.2",
             )
 
             assert run_dir.exists()
@@ -315,9 +316,9 @@ class TestStrategyPersister:
             run_dir = persister.start_run(
                 "TestStrategy",
                 analyst_provider="openai",
-                analyst_model="gpt-4",
+                analyst_model="gpt-5.2",
                 coder_provider="anthropic",
-                coder_model="claude-sonnet-4-20250514",
+                coder_model="claude-sonnet-4-6",
             )
 
             summary_path = run_dir / "run_summary.json"
@@ -326,9 +327,9 @@ class TestStrategyPersister:
             summary = json.loads(summary_path.read_text())
             assert summary["seed_strategy"] == "TestStrategy"
             assert summary["llm_config"]["analyst"]["provider"] == "openai"
-            assert summary["llm_config"]["analyst"]["model"] == "gpt-4"
+            assert summary["llm_config"]["analyst"]["model"] == "gpt-5.2"
             assert summary["llm_config"]["coder"]["provider"] == "anthropic"
-            assert summary["llm_config"]["coder"]["model"] == "claude-sonnet-4-20250514"
+            assert summary["llm_config"]["coder"]["model"] == "claude-sonnet-4-6"
             assert summary["folds"] == []
 
     def test_save_strategy_creates_files(self):
@@ -338,9 +339,9 @@ class TestStrategyPersister:
             persister.start_run(
                 "TestStrategy",
                 analyst_provider="openai",
-                analyst_model="gpt-4",
+                analyst_model="gpt-5.2",
                 coder_provider="openai",
-                coder_model="gpt-4",
+                coder_model="gpt-5.2",
             )
 
             metrics = {"AnnReturn%": 15.5, "Sharpe": 1.2}
@@ -377,9 +378,9 @@ class TestStrategyPersister:
             persister.start_run(
                 "TestStrategy",
                 analyst_provider="openai",
-                analyst_model="gpt-4",
+                analyst_model="gpt-5.2",
                 coder_provider="openai",
-                coder_model="gpt-4",
+                coder_model="gpt-5.2",
             )
 
             metrics = {"AnnReturn%": 20.0, "Sharpe": 1.5}
@@ -400,9 +401,9 @@ class TestStrategyPersister:
             persister.start_run(
                 "TestStrategy",
                 analyst_provider="openai",
-                analyst_model="gpt-4",
+                analyst_model="gpt-5.2",
                 coder_provider="openai",
-                coder_model="gpt-4",
+                coder_model="gpt-5.2",
             )
 
             # Create a fold directory with best_strategy.py
@@ -436,9 +437,9 @@ class TestStrategyPersister:
             persister.start_run(
                 "TestStrategy",
                 analyst_provider="openai",
-                analyst_model="gpt-4",
+                analyst_model="gpt-5.2",
                 coder_provider="openai",
-                coder_model="gpt-4",
+                coder_model="gpt-5.2",
             )
 
             # Create fold directories with best strategies
@@ -525,3 +526,314 @@ class TestProfitEvolverPersistence:
 
         # Default is now None (StrategyPersister is deprecated)
         assert evolver.persister is None
+
+
+# ===========================================================================
+# Phase 13/15 integration: inspirations, eval_context, cascade folds
+# ===========================================================================
+
+# Starts with "class" so evolve_strategy's rename hook gives it the
+# generation-suffixed name; trades frequently so promotion gates pass.
+ACTIVE_CHILD_CODE = '''class EMACrossover(Strategy):
+    """Frequently trading variant used to exercise the evolution loop."""
+
+    def init(self):
+        pass
+
+    def next(self):
+        if not self.position:
+            self.buy()
+        elif len(self.data) % 20 == 0:
+            self.position.close()
+'''
+
+
+def _make_mock_llm():
+    mock_llm = Mock()
+    mock_llm.generate_improvement.return_value = "Trade more actively"
+    mock_llm.generate_improvement_with_inspirations.return_value = "Trade more actively"
+    mock_llm.generate_strategy_code.return_value = ACTIVE_CHILD_CODE
+    mock_llm.fix_code.return_value = ACTIVE_CHILD_CODE
+    return mock_llm
+
+
+@pytest.fixture(autouse=True)
+def clean_seed_db_id():
+    """Remove the _db_id that evolve_strategy sets on shared seed classes.
+
+    evolve_strategy(EMACrossover, ...) with a program_db sets
+    EMACrossover._db_id on the module-level class; without cleanup the stale
+    id leaks into every later test in the session (e.g. print_results would
+    render a DB id for a supposedly untagged strategy).
+    """
+    yield
+    if "_db_id" in EMACrossover.__dict__:
+        del EMACrossover._db_id
+
+
+class TestInspirationsWiring:
+    """Phase 13: sample_inspirations must feed the analyst prompt."""
+
+    def _mock_db(self, inspirations):
+        db = Mock()
+        db.register_strategy.side_effect = [f"id{i}" for i in range(50)]
+        db.sample_inspirations.return_value = inspirations
+        return db
+
+    def test_inspirations_sampled_and_used(self, medium_data):
+        """Should sample with spec args and call the inspirations prompt."""
+        from profit.program_db import EvaluationContext, StrategyRecord
+
+        inspirations = [
+            StrategyRecord(class_name="A", metrics={"ann_return": 12.0}),
+            StrategyRecord(class_name="B", metrics={"ann_return": 9.0}),
+        ]
+        mock_llm = _make_mock_llm()
+        db = self._mock_db(inspirations)
+        ctx = EvaluationContext(dataset_id="testset", timeframe="1H")
+
+        evolver = ProfitEvolver(mock_llm, program_db=db)
+        train, val = medium_data.iloc[:1000], medium_data.iloc[1000:1500]
+        evolver.evolve_strategy(
+            EMACrossover, train, val, max_iters=1, eval_context=ctx
+        )
+
+        db.sample_inspirations.assert_called_once_with(
+            n=3,
+            mode="mixed",
+            exclude_ids=["id0"],  # the seed's DB id (the parent)
+            eval_context_id=ctx.context_id(),
+        )
+        mock_llm.generate_improvement_with_inspirations.assert_called_once()
+        call_args = mock_llm.generate_improvement_with_inspirations.call_args
+        assert call_args[0][2] == inspirations
+        assert not mock_llm.generate_improvement.called
+
+    def test_empty_sample_falls_back(self, medium_data):
+        """With nothing to sample, the plain improvement prompt is used."""
+        mock_llm = _make_mock_llm()
+        db = self._mock_db([])
+
+        evolver = ProfitEvolver(mock_llm, program_db=db)
+        train, val = medium_data.iloc[:1000], medium_data.iloc[1000:1500]
+        evolver.evolve_strategy(EMACrossover, train, val, max_iters=1)
+
+        assert db.sample_inspirations.called
+        assert mock_llm.generate_improvement.called
+        assert not mock_llm.generate_improvement_with_inspirations.called
+
+    def test_use_inspirations_false_skips_sampling(self, medium_data):
+        """use_inspirations=False must not touch sample_inspirations."""
+        mock_llm = _make_mock_llm()
+        db = self._mock_db([])
+
+        evolver = ProfitEvolver(mock_llm, program_db=db)
+        train, val = medium_data.iloc[:1000], medium_data.iloc[1000:1500]
+        evolver.evolve_strategy(
+            EMACrossover, train, val, max_iters=1, use_inspirations=False
+        )
+
+        assert not db.sample_inspirations.called
+        assert mock_llm.generate_improvement.called
+
+
+class TestEvalContextThreading:
+    """Phase 13B: eval_context must reach every registered record."""
+
+    def test_records_carry_context_id(self, medium_data, tmp_path):
+        from profit.program_db import (
+            EvaluationContext,
+            JsonFileBackend,
+            ProgramDatabase,
+        )
+
+        db = ProgramDatabase(backend=JsonFileBackend(str(tmp_path / "db")))
+        ctx = EvaluationContext(
+            dataset_id="testset", timeframe="1H", train_start="2020-01-01"
+        )
+        mock_llm = _make_mock_llm()
+
+        evolver = ProfitEvolver(mock_llm, program_db=db)
+        train, val = medium_data.iloc[:1000], medium_data.iloc[1000:1500]
+        evolver.evolve_strategy(
+            EMACrossover, train, val, max_iters=1, eval_context=ctx
+        )
+
+        records = db.backend.query({})
+        assert len(records) >= 2  # seed + at least one candidate
+        for record in records:
+            assert record.eval_context_id == ctx.context_id()
+
+
+class TestCascadeFolds:
+    """Phase 15: folds reach FullWalkForwardStage through the cascade."""
+
+    @staticmethod
+    def _folds(data):
+        return [
+            (data.iloc[:800], data.iloc[800:1200], data.iloc[1200:1600]),
+            (data.iloc[400:1200], data.iloc[1200:1600], data.iloc[1600:2000]),
+        ]
+
+    def test_full_cascade_with_folds(self, medium_data, tmp_path):
+        """Candidate records should carry a full_walkforward cascade result."""
+        from profit.evaluation import create_cascade
+        from profit.program_db import JsonFileBackend, ProgramDatabase
+
+        db = ProgramDatabase(backend=JsonFileBackend(str(tmp_path / "db")))
+        cascade = create_cascade(mode="full", verbose=False)
+        mock_llm = _make_mock_llm()
+
+        evolver = ProfitEvolver(mock_llm, program_db=db)
+        train, val = medium_data.iloc[:1000], medium_data.iloc[1000:1500]
+        evolver.evolve_strategy(
+            EMACrossover,
+            train,
+            val,
+            max_iters=1,
+            cascade=cascade,
+            folds=self._folds(medium_data),
+        )
+
+        candidates = [
+            r for r in db.backend.query({}) if r.generation == 1
+        ]
+        assert len(candidates) == 1
+        cascade_result = candidates[0].cascade_result
+        assert cascade_result["passed"] is True
+        assert "full_walkforward" in cascade_result["stage_results"]
+        assert cascade_result["final_stage"] == "full_walkforward"
+
+    def test_full_cascade_without_folds_stops_early(self, medium_data, tmp_path):
+        """Without folds, a full cascade must stop after single_fold, not fail."""
+        from profit.evaluation import create_cascade
+        from profit.program_db import JsonFileBackend, ProgramDatabase
+
+        db = ProgramDatabase(backend=JsonFileBackend(str(tmp_path / "db")))
+        cascade = create_cascade(mode="full", verbose=False)
+        mock_llm = _make_mock_llm()
+
+        evolver = ProfitEvolver(mock_llm, program_db=db)
+        train, val = medium_data.iloc[:1000], medium_data.iloc[1000:1500]
+        evolver.evolve_strategy(
+            EMACrossover, train, val, max_iters=1, cascade=cascade, folds=None
+        )
+
+        candidates = [r for r in db.backend.query({}) if r.generation == 1]
+        assert len(candidates) == 1
+        cascade_result = candidates[0].cascade_result
+        assert cascade_result["passed"] is True
+        assert cascade_result["final_stage"] == "single_fold"
+        assert "full_walkforward" not in cascade_result["stage_results"]
+        # The repair loop must not have burned attempts on the missing folds
+        assert not mock_llm.fix_code.called
+
+
+class TestStrictClassLoading:
+    """Phase 15: wrong class names trigger the repair loop with a clear error."""
+
+    def test_wrong_class_name_triggers_repair(self, medium_data):
+        # Leading newline dodges the rename hook, so the generated class
+        # name never matches the expected generation-suffixed name
+        wrong_name_code = "\nclass WrongName(Strategy):\n"
+        wrong_name_code += "    def init(self):\n        pass\n"
+        wrong_name_code += "    def next(self):\n"
+        wrong_name_code += "        if not self.position:\n            self.buy()\n"
+
+        mock_llm = _make_mock_llm()
+        mock_llm.generate_strategy_code.return_value = wrong_name_code
+
+        evolver = ProfitEvolver(mock_llm)
+        train, val = medium_data.iloc[:1000], medium_data.iloc[1000:1500]
+        best_class, _, _ = evolver.evolve_strategy(
+            EMACrossover, train, val, max_iters=1
+        )
+
+        assert mock_llm.fix_code.called
+        assert best_class is not None
+
+
+class TestWalkForwardOrchestration:
+    """walk_forward_optimize threads folds + eval_context into evolution."""
+
+    def test_passes_folds_and_context(self, wf_data):
+        mock_llm = _make_mock_llm()
+        evolver = ProfitEvolver(mock_llm)
+
+        seed_code = "class EMACrossover(Strategy):\n    pass\n"
+        evolver.evolve_strategy = Mock(return_value=(EMACrossover, 5.0, seed_code))
+
+        results = evolver.walk_forward_optimize(
+            wf_data,
+            EMACrossover,
+            n_folds=1,
+            dataset_id="testset",
+            dataset_source="csv",
+            timeframe="1D",
+        )
+
+        assert len(results) == 1
+        result = results[0]
+        for key in (
+            "fold",
+            "strategy",
+            "ann_return",
+            "sharpe",
+            "expectancy",
+            "random_return",
+            "buy_hold_return",
+        ):
+            assert key in result
+
+        call_kwargs = evolver.evolve_strategy.call_args.kwargs
+        assert call_kwargs["eval_context"].dataset_id == "testset"
+        assert call_kwargs["eval_context"].dataset_source == "csv"
+        assert call_kwargs["eval_context"].timeframe == "1D"
+        assert len(call_kwargs["folds"]) == 1
+
+    def test_no_lookahead_in_threaded_folds(self):
+        """Fold i must only see folds up to i - later folds are future data."""
+        np.random.seed(11)
+        n_bars = 2950  # ~8 years of daily bars -> 2 walk-forward folds
+        dates = pd.date_range(start="2015-01-01", periods=n_bars, freq="D")
+        close = 100 * np.exp(np.cumsum(np.random.randn(n_bars) * 0.01))
+        data = pd.DataFrame(
+            {
+                "Open": close,
+                "High": close * 1.001,
+                "Low": close * 0.999,
+                "Close": close,
+                "Volume": 1000,
+            },
+            index=dates,
+        )
+
+        evolver = ProfitEvolver(_make_mock_llm())
+        assert len(evolver.prepare_folds(data, n_folds=2)) == 2
+
+        seed_code = "class EMACrossover(Strategy):\n    pass\n"
+        evolver.evolve_strategy = Mock(return_value=(EMACrossover, 5.0, seed_code))
+
+        evolver.walk_forward_optimize(data, EMACrossover, n_folds=2)
+
+        calls = evolver.evolve_strategy.call_args_list
+        assert len(calls) == 2
+        assert len(calls[0].kwargs["folds"]) == 1
+        assert len(calls[1].kwargs["folds"]) == 2
+        # The last threaded fold is always the current one
+        current_train = calls[1].kwargs["folds"][-1][0]
+        assert str(current_train.index[0]) == str(
+            calls[1].kwargs["eval_context"].train_start
+        )
+
+    def test_mocked_llm_happy_path(self, wf_data):
+        """Full walk_forward_optimize pass with a mocked LLM."""
+        mock_llm = _make_mock_llm()
+        # Mock attributes used by the persister are not needed (persistence off)
+        evolver = ProfitEvolver(mock_llm, diff_mode="never")
+
+        results = evolver.walk_forward_optimize(wf_data, EMACrossover, n_folds=1)
+
+        assert len(results) == 1
+        assert results[0]["fold"] == 1
+        assert isinstance(results[0]["ann_return"], float)

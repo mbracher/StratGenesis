@@ -607,6 +607,31 @@ class S(Strategy):
         result = validate_modified_code(original, modified)
         assert result.valid
 
+    def test_allows_ta_library(self):
+        """The ta technical-analysis library is allowlisted for evolved strategies."""
+        original = """\
+from backtesting import Strategy
+
+class S(Strategy):
+    def init(self):
+        pass
+    def next(self):
+        pass
+"""
+        modified = """\
+from backtesting import Strategy
+import ta
+from ta.trend import EMAIndicator
+
+class S(Strategy):
+    def init(self):
+        pass
+    def next(self):
+        pass
+"""
+        result = validate_modified_code(original, modified)
+        assert result.valid
+
     def test_no_strategy_class_fails(self):
         original = "class S: pass"
         modified = "class NotStrategy:\n    def init(self): pass\n    def next(self): pass"
